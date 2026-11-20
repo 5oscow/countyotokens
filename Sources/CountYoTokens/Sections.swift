@@ -60,6 +60,104 @@ struct HeaderSection: View {
     }
 }
 
+// MARK: - Plan limits
+
+struct LimitsSection: View {
+    @Environment(UsageStore.self) private var store
+
+    var body: some View {
+        let limits = self.store.limits
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                SectionTitle(text: "Plan limits")
+                Spacer()
+                Text("left")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+            }
+            if limits == nil, let issue = self.store.limitsIssue {
+                Text(Self.message(for: issue))
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                // One clock for every row, so countdowns tick together and a passed reset shows full.
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    VStack(spacing: 8) {
+                        ForEach((limits ?? .placeholder()).all) { limit in
+                            LimitRow(limit: limit, now: context.date)
+                        }
+                    }
+                }
+                .redacted(reason: limits == nil ? .placeholder : [])
+                if limits != nil, let issue = self.store.limitsIssue {
+                    Text(Self.message(for: issue))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .transition(.opacity)
+                }
+            }
+        }
+        .modifier(SectionInsets(top: 6, bottom: 7))
+    }
+
+    private static func message(for issue: LimitsError) -> String {
+        switch issue {
+        case .signedOut: "Sign in to Claude Code to see your plan limits."
+        case .expired: "Paused until Claude Code renews its sign-in."
+        case .rateLimited, .failed: "Couldn't reach Anthropic."
+        }
+    }
+}
+
+private struct LimitRow: View {
+    let limit: PlanLimits.Limit
+    let now: Date
+
+    /// Once the reset passes, the stored figure is stale and the limit is full again.
+    private var hasReset: Bool { self.limit.resetsAt.map { $0 <= self.now } ?? false }
+    private var left: Double { self.hasReset ? 100 : self.limit.leftPercent }
+
+    var body: some View {
+        VStack(spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(self.limit.title)
+                    .font(.system(size: 12.5))
+                Spacer(minLength: 8)
+                Text(self.resetText)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                    .contentTransition(.numericText())
+                    .help(self.limit.resetsAt.map { "Resets \($0.formatted(.dateTime.weekday(.wide).day().month().hour().minute()))" } ?? "")
+                Text("\(Int(self.left.rounded()))%")
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(self.isLow ? AnyShapeStyle(Color.red) : AnyShapeStyle(.primary))
+                    .contentTransition(.numericText(value: self.left))
+                    .frame(width: 40, alignment: .trailing)
+            }
+            .monospacedDigit()
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.08))
+                    Capsule()
+                        .fill(self.isLow ? AnyShapeStyle(Color.red) : AnyShapeStyle(Theme.accent))
+                        .frame(width: max(3, proxy.size.width * self.left / 100))
+                }
+            }
+            .frame(height: 3)
+        }
+    }
+
+    private var isLow: Bool { self.left < 10 }
+
+    private var resetText: String {
+        guard let reset = self.limit.resetsAt else { return "" }
+        if self.hasReset { return "reset" }
+        return "resets in \(Format.countdown(to: reset, from: self.now))"
+    }
+}
+
 // MARK: - Today and this window
 
 struct HeroSection: View {

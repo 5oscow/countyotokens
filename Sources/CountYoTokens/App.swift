@@ -46,6 +46,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.autoenablesItems = false
         menu.addItem(self.viewItem(HeaderSection()))
         menu.addItem(.separator())
+        menu.addItem(self.viewItem(LimitsSection()))
+        menu.addItem(.separator())
         menu.addItem(self.viewItem(HeroSection()))
         menu.addItem(.separator())
         menu.addItem(self.viewItem(HistorySection()))
@@ -81,6 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         self.store.refresh()
+        self.store.refreshLimits(minimumAge: 60)
         self.store.reloadAccount()
     }
 
@@ -101,7 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         NSApp.activate()
         self.settingsWindow?.makeKeyAndOrderFront(nil)
-        // Nothing pre-selected: the time field would otherwise open with its hour highlighted.
+        // Nothing pre-selected: no focus ring on the first switch when the window opens.
         self.settingsWindow?.makeFirstResponder(nil)
     }
 
