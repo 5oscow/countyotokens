@@ -9,9 +9,13 @@ enum Theme {
             : NSColor(srgbRed: 0.80, green: 0.40, blue: 0.27, alpha: 1)
     })
 
-    /// Pace colours: Apple's accessible green and orange in light mode, the system ones in dark.
-    static let reserve = adaptive(light: NSColor(srgbRed: 0.14, green: 0.54, blue: 0.24, alpha: 1), dark: .systemGreen)
-    static let deficit = adaptive(light: NSColor(srgbRed: 0.79, green: 0.20, blue: 0.0, alpha: 1), dark: .systemOrange)
+    /// Pace colours: muted sage and amber, quiet enough to sit beside grey secondary text.
+    static let reserve = adaptive(
+        light: NSColor(srgbRed: 0.33, green: 0.52, blue: 0.38, alpha: 1),
+        dark: NSColor(srgbRed: 0.58, green: 0.73, blue: 0.60, alpha: 1))
+    static let deficit = adaptive(
+        light: NSColor(srgbRed: 0.70, green: 0.40, blue: 0.16, alpha: 1),
+        dark: NSColor(srgbRed: 0.90, green: 0.66, blue: 0.42, alpha: 1))
 
     private static func adaptive(light: NSColor, dark: NSColor) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in

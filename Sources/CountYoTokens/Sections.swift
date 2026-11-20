@@ -83,7 +83,7 @@ struct LimitsSection: View {
             } else {
                 // One clock for every row, so countdowns tick together and a passed reset shows full.
                 TimelineView(.periodic(from: .now, by: 30)) { context in
-                    VStack(spacing: 8) {
+                    VStack(spacing: 11) {
                         ForEach((limits ?? .placeholder()).all) { limit in
                             LimitRow(limit: limit, now: context.date)
                         }
@@ -157,6 +157,7 @@ private struct LimitRow: View {
             .help(pace.map { "Even pace would leave \(Int((100 - $0.expectedUsedPercent).rounded()))% by now" } ?? "")
             if let pace {
                 PaceLine(pace: pace, now: self.now)
+                    .padding(.top, 3)
                     .transition(.opacity)
             }
         }
