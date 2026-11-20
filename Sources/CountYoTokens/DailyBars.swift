@@ -6,13 +6,15 @@ import TokenCore
 struct DailyBars: View {
     let days: [UsageSnapshot.Day]
     @Binding var hovered: Date?
+    /// Dollars normally; tokens for a provider that records no cost.
+    var measure: (UsageSnapshot.Day) -> Double = { $0.cost }
 
     private let spacing: CGFloat = 2.5
 
     var body: some View {
         GeometryReader { proxy in
-            let peak = max(self.days.map(\.cost).max() ?? 0, 0.01)
-            let average = self.days.isEmpty ? 0 : self.days.reduce(0) { $0 + $1.cost } / Double(self.days.count)
+            let peak = max(self.days.map(self.measure).max() ?? 0, 0.01)
+            let average = self.days.isEmpty ? 0 : self.days.reduce(0) { $0 + self.measure($1) } / Double(self.days.count)
             let height = proxy.size.height
             ZStack(alignment: .bottomLeading) {
                 HStack(alignment: .bottom, spacing: self.spacing) {
@@ -20,8 +22,8 @@ struct DailyBars: View {
                         let isToday = day.id == self.days.last?.id
                         let isHovered = day.id == self.hovered
                         RoundedRectangle(cornerRadius: 2, style: .continuous)
-                            .fill(self.fill(isToday: isToday, isHovered: isHovered, isEmpty: day.cost <= 0))
-                            .frame(height: day.cost > 0 ? max(3, height * day.cost / peak) : 2)
+                            .fill(self.fill(isToday: isToday, isHovered: isHovered, isEmpty: self.measure(day) <= 0))
+                            .frame(height: self.measure(day) > 0 ? max(3, height * self.measure(day) / peak) : 2)
                             .frame(maxWidth: .infinity)
                     }
                 }

@@ -9,7 +9,7 @@ let package = Package(
         .executable(name: "tokbench", targets: ["tokbench"]),
     ],
     targets: [
-        .target(name: "TokenCore"),
+        .target(name: "TokenCore", linkerSettings: [.linkedLibrary("sqlite3")]),
         .executableTarget(name: "CountYoTokens", dependencies: ["TokenCore"]),
         .executableTarget(name: "tokbench", dependencies: ["TokenCore"]),
     ])

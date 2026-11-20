@@ -5,7 +5,7 @@ import TokenCore
 // inset to line up with the menu's own item text. Every section keeps one fixed view tree:
 // a refresh only changes values inside it (digits roll), nothing is swapped, so nothing flashes.
 
-private extension UsageStore {
+private extension ProviderModel {
     /// Before the first-ever scan, all zeros in the real layout (shown redacted).
     var shown: UsageSnapshot { self.snapshot ?? .placeholder(settings: self.windowSettings) }
 }
@@ -33,24 +33,72 @@ private struct SectionTitle: View {
     }
 }
 
+// MARK: - Provider switcher
+
+/// Tabs for the enabled providers. The selected one sits on a soft fill, never the blue highlight.
+struct SwitcherSection: View {
+    @Environment(UsageStore.self) private var store
+    @Namespace private var selection
+    @State private var hovered: ProviderID?
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(self.store.enabled) { id in
+                let isSelected = id == self.store.selected
+                Button {
+                    guard !isSelected else { return }
+                    withAnimation(.smooth(duration: 0.3)) { self.store.selected = id }
+                    self.store.current.refreshLimits(minimumAge: 60)
+                } label: {
+                    Text(id.shortName)
+                        .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                        .foregroundStyle(isSelected ? .primary : .secondary)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 24)
+                        .background {
+                            if isSelected {
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(Color.primary.opacity(0.1))
+                                    .matchedGeometryEffect(id: "tab", in: self.selection)
+                            } else if self.hovered == id {
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(Color.primary.opacity(0.05))
+                            }
+                        }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { inside in self.hovered = inside ? id : (self.hovered == id ? nil : self.hovered) }
+                .help(id.displayName)
+            }
+        }
+        .padding(.horizontal, Theme.inset - 6)
+        .padding(.vertical, 2)
+        .animation(.easeOut(duration: 0.12), value: self.hovered)
+    }
+}
+
 // MARK: - Header
 
 struct HeaderSection: View {
     @Environment(UsageStore.self) private var store
+    private var model: ProviderModel { self.store.current }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Claude")
+                Text(self.model.id.displayName)
                     .font(.system(size: 13, weight: .bold))
+                    .contentTransition(.opacity)
                 Spacer(minLength: 8)
-                if let plan = self.store.account?.plan {
+                if let plan = self.model.plan {
                     Text(plan)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
             }
-            Text(self.store.account?.email ?? "Local usage")
+            Text(self.model.subtitle)
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -64,19 +112,20 @@ struct HeaderSection: View {
 
 struct LimitsSection: View {
     @Environment(UsageStore.self) private var store
+    private var model: ProviderModel { self.store.current }
 
     var body: some View {
-        let limits = self.store.limits
+        let limits = self.model.limits
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                SectionTitle(text: "Plan limits")
+                SectionTitle(text: "Limits")
                 Spacer()
                 Text("left")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
             }
-            if limits == nil, let issue = self.store.limitsIssue {
-                Text(Self.message(for: issue))
+            if limits == nil, let issue = self.model.limitsIssue {
+                Text(self.model.message(for: issue))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -84,14 +133,14 @@ struct LimitsSection: View {
                 // One clock for every row, so countdowns tick together and a passed reset shows full.
                 TimelineView(.periodic(from: .now, by: 30)) { context in
                     VStack(spacing: 11) {
-                        ForEach((limits ?? .placeholder()).all) { limit in
+                        ForEach((limits ?? .placeholder()).items) { limit in
                             LimitRow(limit: limit, now: context.date)
                         }
                     }
                 }
                 .redacted(reason: limits == nil ? .placeholder : [])
-                if limits != nil, let issue = self.store.limitsIssue {
-                    Text(Self.message(for: issue))
+                if limits != nil, let issue = self.model.limitsIssue {
+                    Text(self.model.message(for: issue))
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -102,13 +151,6 @@ struct LimitsSection: View {
         .modifier(SectionInsets(top: 6, bottom: 7))
     }
 
-    private static func message(for issue: LimitsError) -> String {
-        switch issue {
-        case .signedOut: "Sign in to Claude Code to see your plan limits."
-        case .expired: "Paused until Claude Code renews its sign-in."
-        case .rateLimited, .failed: "Couldn't reach Anthropic."
-        }
-    }
 }
 
 private struct LimitRow: View {
@@ -206,18 +248,21 @@ private struct PaceLine: View {
 
 struct HeroSection: View {
     @Environment(UsageStore.self) private var store
+    private var model: ProviderModel { self.store.current }
 
     var body: some View {
-        let snapshot = self.store.shown
+        let snapshot = self.model.shown
         HStack(alignment: .top, spacing: 12) {
-            Metric(title: "Today", value: snapshot.today?.cost ?? 0, tokens: snapshot.today?.tokens ?? 0)
+            Metric(title: "Today", value: snapshot.today?.cost ?? 0, tokens: snapshot.today?.tokens ?? 0,
+                   tokensOnly: snapshot.measuresTokens)
             Metric(
                 title: "This window",
                 value: snapshot.currentWindow?.cost ?? 0,
-                tokens: snapshot.currentWindow?.tokens ?? 0)
+                tokens: snapshot.currentWindow?.tokens ?? 0,
+                tokensOnly: snapshot.measuresTokens)
         }
         .modifier(SectionInsets(top: 5, bottom: 6))
-        .redacted(reason: self.store.snapshot == nil ? .placeholder : [])
+        .redacted(reason: self.model.snapshot == nil ? .placeholder : [])
     }
 }
 
@@ -225,17 +270,18 @@ private struct Metric: View {
     let title: String
     let value: Double
     let tokens: Int
+    var tokensOnly = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             SectionTitle(text: self.title)
-            Text(Format.money(self.value))
+            Text(self.tokensOnly ? Format.tokens(self.tokens) : Format.money(self.value))
                 .font(.system(size: 24, weight: .semibold, design: .rounded))
                 .tracking(-0.2)
-                .contentTransition(.numericText(value: self.value))
+                .contentTransition(.numericText(value: self.tokensOnly ? Double(self.tokens) : self.value))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-            Text("\(Format.tokens(self.tokens)) tokens")
+            Text(self.tokensOnly ? "tokens" : "\(Format.tokens(self.tokens)) tokens")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .contentTransition(.numericText(value: Double(self.tokens)))
@@ -249,30 +295,37 @@ private struct Metric: View {
 
 struct HistorySection: View {
     @Environment(UsageStore.self) private var store
+    private var model: ProviderModel { self.store.current }
     @State private var hoveredDay: Date?
 
     var body: some View {
-        let snapshot = self.store.shown
+        let snapshot = self.model.shown
         let day = self.hoveredDay.flatMap { id in snapshot.days.first { $0.id == id } }
+        let tokensOnly = snapshot.measuresTokens
+        let tokens = day?.tokens ?? snapshot.historyTokens
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 SectionTitle(text: day.map { Format.day($0.start) } ?? "Last 30 days")
                 Spacer(minLength: 8)
-                Text(day.map { Format.money($0.cost) } ?? Format.wholeMoney(snapshot.historyCost))
-                    .font(.system(size: 12, weight: .semibold))
-                    .contentTransition(.numericText(value: day?.cost ?? snapshot.historyCost))
-                Text(Format.tokens(day?.tokens ?? snapshot.historyTokens))
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .contentTransition(.numericText(value: Double(day?.tokens ?? snapshot.historyTokens)))
+                if !tokensOnly {
+                    Text(day.map { Format.money($0.cost) } ?? Format.wholeMoney(snapshot.historyCost))
+                        .font(.system(size: 12, weight: .semibold))
+                        .contentTransition(.numericText(value: day?.cost ?? snapshot.historyCost))
+                }
+                Text(tokensOnly ? "\(Format.tokens(tokens)) tokens" : Format.tokens(tokens))
+                    .font(.system(size: 12, weight: tokensOnly ? .semibold : .regular))
+                    .foregroundStyle(tokensOnly ? .primary : .secondary)
+                    .contentTransition(.numericText(value: Double(tokens)))
             }
             .monospacedDigit()
-            DailyBars(days: snapshot.days, hovered: self.$hoveredDay)
+            DailyBars(days: snapshot.days, hovered: self.$hoveredDay, measure: tokensOnly ? { Double($0.tokens) } : { $0.cost })
                 .frame(height: 50)
             HStack {
                 Text(snapshot.days.first.map { $0.start.formatted(.dateTime.day().month(.abbreviated)) } ?? "")
                 Spacer()
-                Text("avg \(Format.wholeMoney(snapshot.historyCost / Double(max(1, snapshot.days.count)))) a day")
+                Text(tokensOnly
+                    ? "avg \(Format.tokens(snapshot.historyTokens / max(1, snapshot.days.count))) a day"
+                    : "avg \(Format.wholeMoney(snapshot.historyCost / Double(max(1, snapshot.days.count)))) a day")
                     .contentTransition(.numericText())
                 Spacer()
                 Text("Today")
@@ -283,7 +336,7 @@ struct HistorySection: View {
         }
         .modifier(SectionInsets(top: 6, bottom: 7))
         .animation(.easeOut(duration: 0.12), value: self.hoveredDay)
-        .redacted(reason: self.store.snapshot == nil ? .placeholder : [])
+        .redacted(reason: self.model.snapshot == nil ? .placeholder : [])
     }
 }
 
@@ -291,17 +344,19 @@ struct HistorySection: View {
 
 struct WindowsSection: View {
     @Environment(UsageStore.self) private var store
+    private var model: ProviderModel { self.store.current }
 
     var body: some View {
-        let snapshot = self.store.shown
-        let peak = max(snapshot.windows.map(\.cost).max() ?? 0, 0.01)
+        let snapshot = self.model.shown
+        let tokensOnly = snapshot.measuresTokens
+        let peak = max(snapshot.windows.map { tokensOnly ? Double($0.tokens) : $0.cost }.max() ?? 0, 0.01)
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 SectionTitle(text: "Weekly windows")
                 Spacer()
                 if let end = snapshot.currentWindow?.end {
                     TimelineView(.periodic(from: .now, by: 30)) { context in
-                        Text("resets in \(Format.countdown(to: end, from: context.date))")
+                        Text("\(self.model.id.hasLimits ? "resets" : "ends") in \(Format.countdown(to: end, from: context.date))")
                             .font(.system(size: 11))
                             .foregroundStyle(.tertiary)
                             .monospacedDigit()
@@ -312,18 +367,21 @@ struct WindowsSection: View {
             }
             VStack(spacing: 8) {
                 ForEach(snapshot.windows) { window in
-                    WindowRow(window: window, peak: peak)
+                    WindowRow(window: window, peak: peak, tokensOnly: tokensOnly)
                 }
             }
         }
         .modifier(SectionInsets(top: 6, bottom: 7))
-        .redacted(reason: self.store.snapshot == nil ? .placeholder : [])
+        .redacted(reason: self.model.snapshot == nil ? .placeholder : [])
     }
 }
 
 private struct WindowRow: View {
     let window: UsageSnapshot.Window
     let peak: Double
+    let tokensOnly: Bool
+
+    private var amount: Double { self.tokensOnly ? Double(self.window.tokens) : self.window.cost }
 
     var body: some View {
         VStack(spacing: 4) {
@@ -339,15 +397,17 @@ private struct WindowRow: View {
                         .help("Current window")
                 }
                 Spacer(minLength: 8)
-                Text(Format.tokens(self.window.tokens))
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
-                    .contentTransition(.numericText(value: Double(self.window.tokens)))
-                    .frame(width: 46, alignment: .trailing)
-                Text(Format.wholeMoney(self.window.cost))
+                if !self.tokensOnly {
+                    Text(Format.tokens(self.window.tokens))
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .contentTransition(.numericText(value: Double(self.window.tokens)))
+                        .frame(width: 46, alignment: .trailing)
+                }
+                Text(self.tokensOnly ? Format.tokens(self.window.tokens) : Format.wholeMoney(self.window.cost))
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(self.window.isCurrent ? .primary : .secondary)
-                    .contentTransition(.numericText(value: self.window.cost))
+                    .contentTransition(.numericText(value: self.amount))
                     .frame(width: 56, alignment: .trailing)
             }
             .monospacedDigit()
@@ -356,7 +416,7 @@ private struct WindowRow: View {
                     Capsule().fill(Color.primary.opacity(0.08))
                     Capsule()
                         .fill(self.window.isCurrent ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Color.primary.opacity(0.28)))
-                        .frame(width: max(3, proxy.size.width * min(1, self.window.cost / self.peak)))
+                        .frame(width: max(3, proxy.size.width * min(1, self.amount / self.peak)))
                 }
             }
             .frame(height: 3)
@@ -368,17 +428,23 @@ private struct WindowRow: View {
 
 struct FooterSection: View {
     @Environment(UsageStore.self) private var store
+    private var model: ProviderModel { self.store.current }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
+            if self.model.id.hasSpend {
             HStack(spacing: 4) {
                 Text("Top model")
                     .foregroundStyle(.secondary)
-                if let top = self.store.snapshot?.topModel {
+                if let top = self.model.snapshot?.topModel {
                     Text(Format.model(top.model))
                         .fontWeight(.medium)
-                    Text("· \(Int((top.share * 100).rounded()))% of spend")
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Text("· \(Int((top.share * 100).rounded()))% of \(top.byTokens == true ? "tokens" : "spend")")
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize()
                         .contentTransition(.numericText(value: top.share))
                 } else {
                     Text("—").foregroundStyle(.tertiary)
@@ -386,6 +452,7 @@ struct FooterSection: View {
             }
             .font(.system(size: 12))
             .monospacedDigit()
+            }
             TimelineView(.periodic(from: .now, by: 15)) { context in
                 Text(self.status(now: context.date))
                     .font(.system(size: 11))
@@ -398,7 +465,9 @@ struct FooterSection: View {
     }
 
     private func status(now: Date) -> String {
-        let freshness = self.store.isVisiblyRefreshing ? "Updating…" : Format.updated(self.store.updatedAt, now: now)
-        return "Estimated at API prices · \(freshness)"
+        let updated = self.model.id.hasSpend ? self.model.updatedAt : self.model.limits?.fetchedAt
+        let freshness = self.model.isVisiblyRefreshing ? "Updating…"
+            : updated == nil && !self.model.id.hasSpend ? "Not updated yet" : Format.updated(updated, now: now)
+        return "\(self.model.id.hasSpend ? self.model.id.spendNote : "Limits from \(self.model.id.displayName)") · \(freshness)"
     }
 }

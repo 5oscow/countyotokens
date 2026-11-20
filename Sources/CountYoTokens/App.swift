@@ -24,6 +24,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var settingsWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if Snapshots.folder != nil {
+            Snapshots.run(store: self.store)
+            return
+        }
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.statusItem.autosaveName = "countyotokens"
         self.statusItem.isVisible = true
@@ -31,10 +35,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         self.statusItem.button?.imagePosition = .imageLeading
         self.statusItem.button?.toolTip = "count yo tokens"
         self.statusItem.menu = self.makeMenu()
+        self.observeLayout()
         self.observeStatusTitle()
     }
 
     // MARK: Menu
+
+    /// Items that only some providers have, shown or hidden as the selection changes.
+    private var switcherItems: [NSMenuItem] = []
+    private var limitItems: [NSMenuItem] = []
+    private var spendItems: [NSMenuItem] = []
 
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
@@ -44,15 +54,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.appearance = NSAppearance(named: forced == "light" ? .aqua : .darkAqua)
         }
         menu.autoenablesItems = false
+        func add(_ item: NSMenuItem, to group: inout [NSMenuItem]) {
+            menu.addItem(item)
+            group.append(item)
+        }
+        add(self.viewItem(SwitcherSection()), to: &self.switcherItems)
+        add(.separator(), to: &self.switcherItems)
         menu.addItem(self.viewItem(HeaderSection()))
-        menu.addItem(.separator())
-        menu.addItem(self.viewItem(LimitsSection()))
-        menu.addItem(.separator())
-        menu.addItem(self.viewItem(HeroSection()))
-        menu.addItem(.separator())
-        menu.addItem(self.viewItem(HistorySection()))
-        menu.addItem(.separator())
-        menu.addItem(self.viewItem(WindowsSection()))
+        add(.separator(), to: &self.limitItems)
+        add(self.viewItem(LimitsSection()), to: &self.limitItems)
+        add(.separator(), to: &self.spendItems)
+        add(self.viewItem(HeroSection()), to: &self.spendItems)
+        add(.separator(), to: &self.spendItems)
+        add(self.viewItem(HistorySection()), to: &self.spendItems)
+        add(.separator(), to: &self.spendItems)
+        add(self.viewItem(WindowsSection()), to: &self.spendItems)
         menu.addItem(.separator())
         menu.addItem(self.viewItem(FooterSection()))
         menu.addItem(.separator())
@@ -81,30 +97,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return item
     }
 
-    func menuWillOpen(_ menu: NSMenu) {
-        self.store.refresh()
-        self.store.refreshLimits(minimumAge: 60)
-        self.store.reloadAccount()
+    /// Re-run whenever the selection or the enabled set changes, including while the menu is open.
+    private func observeLayout() {
+        withObservationTracking {
+            let provider = self.store.selected
+            let showsSwitcher = self.store.enabled.count > 1
+            for item in self.switcherItems where item.isHidden == showsSwitcher { item.isHidden = !showsSwitcher }
+            for item in self.limitItems where item.isHidden == provider.hasLimits { item.isHidden = !provider.hasLimits }
+            for item in self.spendItems where item.isHidden == provider.hasSpend { item.isHidden = !provider.hasSpend }
+        } onChange: {
+            DispatchQueue.main.async { Main.delegate.observeLayout() }
+        }
     }
 
-    @objc private func refresh() { self.store.refresh() }
+    func menuWillOpen(_ menu: NSMenu) { self.store.menuWillOpen() }
+
+    @objc private func refresh() { self.store.refreshNow() }
 
     @objc private func quit() { NSApp.terminate(nil) }
 
     @objc private func openSettings() {
-        if self.settingsWindow == nil {
-            let controller = NSHostingController(rootView: SettingsPanel().environment(self.store))
-            controller.sizingOptions = [.preferredContentSize]
-            let window = NSWindow(contentViewController: controller)
-            window.title = "count yo tokens Settings"
-            window.styleMask = [.titled, .closable]
-            window.isReleasedWhenClosed = false
-            window.center()
-            self.settingsWindow = window
-        }
+        if self.settingsWindow == nil { self.settingsWindow = SettingsWindow.make(store: self.store) }
         NSApp.activate()
         self.settingsWindow?.makeKeyAndOrderFront(nil)
-        // Nothing pre-selected: no focus ring on the first switch when the window opens.
+        // Nothing pre-selected: no focus ring on the first control when the window opens.
         self.settingsWindow?.makeFirstResponder(nil)
     }
 
@@ -120,8 +136,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func updateStatusTitle() {
         guard let button = self.statusItem.button else { return }
-        let cost = self.store.showsSpendInMenuBar ? self.store.snapshot?.today?.cost : nil
-        let title = cost.map { " " + Format.wholeMoney($0) } ?? ""
+        let model = self.store.current
+        let title: String = switch self.store.menuBarDisplay {
+        case .icon: ""
+        case .spend: model.snapshot?.today.map { " " + Format.wholeMoney($0.cost) } ?? ""
+        case .limit: model.lowestLeft.map { " \(Int($0.rounded()))%" } ?? ""
+        }
         guard button.attributedTitle.string != title else { return }
         button.attributedTitle = NSAttributedString(string: title, attributes: [
             .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular),

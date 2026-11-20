@@ -1,39 +1,48 @@
 # count yo tokens
 
-A tiny macOS menu bar app that shows how much of your Claude plan is left, and what your usage
-would cost at API list prices, read straight from local logs.
+A tiny macOS menu bar app that shows how much of each AI plan you have left, and what your usage
+costs, read straight from local logs.
 
-Hard fork of [CodexBar](https://github.com/steipete/CodexBar) v0.84.0, cut down to the one card it
-actually needs. No upstream remote, no auto-updates.
+Hard fork of [CodexBar](https://github.com/steipete/CodexBar) v0.84.0, cut down and redesigned.
+No upstream remote, no auto-updates.
 
-## What it shows
+## Providers
 
-- **Plan limits**: Session (5-hour), Weekly and model-scoped weekly limits such as Fable, each with
-  the percentage left, when it resets, and the pace: how far you are in reserve or deficit against
-  an even spread, and whether it lasts until reset or when it runs out
-- **Today** and **this window** (the current 7-day weekly-limit window): cost and tokens
-- **Last 30 days**: total, a daily bar chart (hover a bar for that day), and the daily average
-- **Weekly windows**: the current window and the three before it, each with tokens, cost and a meter
-- **Top model** by share of spend, and when the figures were last updated
+One tally icon; a switcher at the top of the menu picks the provider.
 
-Limits come from Anthropic's usage endpoint, using the sign-in Claude Code already keeps in your
-login Keychain (read with `/usr/bin/security`, which that item already trusts, so there is no prompt).
-The token is sent only to `api.anthropic.com`, never stored or refreshed here; if it has expired,
-limits pause until Claude Code renews it. They refresh every 3 minutes and when you open the menu
-(at most once a minute), and back off when the server asks. The weekly windows are counted from the
-weekly reset Anthropic reports.
+| Provider | Spend | Limits |
+|---|---|---|
+| Claude | Claude Code and pi/omp logs, at API list prices | Session, Weekly, model-scoped weekly (Fable), via Claude Code's sign-in |
+| Codex | `~/.codex/sessions`, at OpenAI list prices | Session and Weekly from ChatGPT, via `~/.codex/auth.json` |
+| OpenCode Go | OpenCode's own history (`opencode.db`), as recorded | 5-hour, Weekly, Monthly, via the Go key OpenCode holds |
+| OpenCode Zen | OpenCode's own history, as recorded | None: pay as you go |
+| Devin | — | Daily and Weekly, with a session token pasted in Settings |
+| Droid (Factory) | — | 5-hour, Weekly, Monthly (or Standard/Premium), with an API key |
 
-Costs: Claude Code transcripts (`~/.claude/projects`, `~/.config/claude/projects`, or
-`$CLAUDE_CONFIG_DIR/projects`) and pi / oh-my-pi sessions (`~/.pi/agent/sessions`,
-`~/.omp/agent/sessions`) for Anthropic models. Account email and plan come from `~/.claude.json`.
-Prices are the models.dev `anthropic` catalog: a snapshot is bundled, refreshed at most once a day.
+Each provider's menu shows its limits (percentage left, reset, and pace: reserve or deficit against
+an even spread, and whether it lasts until reset), then today and this window, the last 30 days as
+daily bars, the last four weekly windows, and the top model. When a provider records no cost (Go
+on free models, say), figures are shown in tokens instead.
+
+Credentials are only read, never refreshed or written back: Claude Code's Keychain item through
+`/usr/bin/security` (which that item already trusts, so there is no prompt), Codex's `auth.json`,
+OpenCode's `credential` table (read-only SQLite). Keys pasted into Settings are stored in the login
+Keychain the same way. Each token goes only to its own provider. Limits refresh every 3 minutes and
+when the menu opens (at most once a minute), and back off when a server asks. Weekly spend windows
+follow each provider's reported weekly reset (Monday 00:00 otherwise).
+
+Prices come from the models.dev `anthropic` and `openai` catalogs: a snapshot is bundled and
+refreshed at most once a day.
 
 ## Settings
 
 Menu → **Settings…** (⌘,):
 
-- **Show today's spend in the menu bar** next to the tally icon.
-- **Open at login**.
+- **General**: what sits next to the icon (nothing, today's spend, or the lowest limit left) and
+  open at login.
+- **Providers**: turn each provider on or off, see where its figures come from and whether it is
+  connected, and paste the Devin token or Factory API key.
+- **About**.
 
 ## Build
 
@@ -41,7 +50,9 @@ Menu → **Settings…** (⌘,):
 ./Scripts/build_app.sh            # builds dist/count yo tokens.app
 ./Scripts/build_app.sh --install  # replaces /Applications/count yo tokens.app and relaunches
 swift run -c release tokbench 5   # times a cold scan and five warm refreshes
-swift run -c release tokbench limits  # fetches and prints the plan limits once
+swift run -c release tokbench limits claude codex opencode-go devin droid  # fetches limits once
+swift run -c release tokbench spend claude codex opencode-go zen         # one spend scan each
+.build/release/CountYoTokens -snapshot <folder>   # draws every menu and Settings pane to PNGs
 ```
 
 Requires macOS 15 and Swift 6.
@@ -54,7 +65,9 @@ Requires macOS 15 and Swift 6.
 - Cold scans map files and parse them in parallel, biggest first; lines are prefiltered with
   `memmem` before any JSON is decoded.
 - Cross-file de-duplication is maintained incrementally; unchanged data reuses the last result.
-- FSEvents triggers a refresh within a second of Claude writing a line.
+- FSEvents triggers a refresh within a second of a log or OpenCode's database changing.
+- Codex sessions are read incrementally the same way; OpenCode's database is re-read only when it
+  or its WAL changes.
 
 ## License
 

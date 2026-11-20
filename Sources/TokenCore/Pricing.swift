@@ -76,7 +76,8 @@ public struct PriceBook: Sendable {
         self.prices.merge(newer) { _, new in new }
     }
 
-    // models.dev `anthropic` provider, snapshot 2026-11-20. USD per million tokens.
+    // USD per million tokens.
+    // models.dev `anthropic` provider, snapshot 2026-11-20.
     public static let bundled: [String: ModelPrice] = [
         "claude-fable-5": .init(10, 50, read: 1, write: 12.5),
         "claude-fable-5-1": .init(10, 50, read: 0.25, write: 12.5),
@@ -97,6 +98,32 @@ public struct PriceBook: Sendable {
         "claude-haiku-5-5": .init(0.1, 0.5, read: 0.01, write: 0.125, threshold: 100_000,
                                   above: .init(input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 0.625)),
         "claude-haiku-4-5": .init(1, 5, read: 0.1, write: 1.25),
+
+        // models.dev `openai` provider, snapshot 2026-11-20. Long context above 272k input tokens.
+        "gpt-5": .init(1.25, 10, read: 0.125, write: 1.25),
+        "gpt-5-mini": .init(0.25, 2, read: 0.025, write: 0.25),
+        "gpt-5.1": .init(1.25, 10, read: 0.125, write: 1.25),
+        "gpt-5.2": .init(1.75, 14, read: 0.175, write: 1.75),
+        "gpt-5.3-codex": .init(1.75, 14, read: 0.175, write: 1.75),
+        "gpt-5.4": .init(2.5, 15, read: 0.25, write: 2.5, threshold: 272_000,
+                         above: .init(input: 5, output: 22.5, cacheRead: 0.5, cacheWrite: 5)),
+        "gpt-5.4-mini": .init(0.75, 4.5, read: 0.075, write: 0.75),
+        "gpt-5.5": .init(5, 30, read: 0.5, write: 5, threshold: 272_000,
+                         above: .init(input: 10, output: 45, cacheRead: 1, cacheWrite: 10)),
+        "gpt-5.6": .init(4, 20, read: 0.4, write: 5, threshold: 272_000,
+                         above: .init(input: 8, output: 30, cacheRead: 0.8, cacheWrite: 10)),
+        "gpt-5.6-sol": .init(4, 20, read: 0.4, write: 5, threshold: 272_000,
+                             above: .init(input: 8, output: 30, cacheRead: 0.8, cacheWrite: 10)),
+        "gpt-5.6-terra": .init(2, 12, read: 0.2, write: 2.5, threshold: 272_000,
+                               above: .init(input: 4, output: 18, cacheRead: 0.4, cacheWrite: 5)),
+        "gpt-5.6-luna": .init(0.2, 1.2, read: 0.02, write: 0.25, threshold: 272_000,
+                              above: .init(input: 0.4, output: 1.8, cacheRead: 0.04, cacheWrite: 0.5)),
+        "gpt-6-sol": .init(2, 10, read: 0.2, write: 2.5, threshold: 272_000,
+                           above: .init(input: 4, output: 15, cacheRead: 0.4, cacheWrite: 5)),
+        "gpt-6.1-sol": .init(2, 10, read: 0.1, write: 2.5, threshold: 272_000,
+                             above: .init(input: 4, output: 15, cacheRead: 0.2, cacheWrite: 5)),
+        "gpt-6.2-sol": .init(2, 10, read: 0.1, write: 2.5, threshold: 272_000,
+                             above: .init(input: 4, output: 15, cacheRead: 0.2, cacheWrite: 5)),
     ]
 }
 
@@ -105,7 +132,8 @@ public struct PriceBook: Sendable {
 public enum PriceCatalog {
     static let endpoint = URL(string: "https://models.dev/api.json")!
 
-    public static var cacheURL: URL { AppPaths.support.appendingPathComponent("prices.json") }
+    /// v2: Anthropic and OpenAI models (the first version held Anthropic only).
+    public static var cacheURL: URL { AppPaths.support.appendingPathComponent("prices-v2.json") }
 
     /// Bundled rates overlaid with the last downloaded catalog, if any.
     public static func load() -> PriceBook {
@@ -135,10 +163,18 @@ public enum PriceCatalog {
     }
 
     static func parse(_ data: Data) -> [String: ModelPrice]? {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let provider = root["anthropic"] as? [String: Any],
-              let models = provider["models"] as? [String: Any]
-        else { return nil }
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        var prices: [String: ModelPrice] = [:]
+        for name in ["openai", "anthropic"] {
+            guard let models = (root[name] as? [String: Any])?["models"] as? [String: Any] else { continue }
+            prices.merge(self.parse(models: models, preferTiers: name == "openai")) { _, new in new }
+        }
+        return prices.isEmpty ? nil : prices
+    }
+
+    /// OpenAI's long-context rates start at the tier's size (272k); its `context_over_200k` block is
+    /// only a label. Anthropic keeps the reading this app has always used.
+    static func parse(models: [String: Any], preferTiers: Bool) -> [String: ModelPrice] {
         var prices: [String: ModelPrice] = [:]
         for (id, value) in models {
             guard let cost = (value as? [String: Any])?["cost"] as? [String: Any],
@@ -151,7 +187,9 @@ public enum PriceCatalog {
             let tier = (cost["tiers"] as? [[String: Any]])?.first {
                 ($0["tier"] as? [String: Any])?["type"] as? String == "context"
             }
-            if let over = cost["context_over_200k"] as? [String: Any] ?? tier {
+            if let over = preferTiers ? tier ?? cost["context_over_200k"] as? [String: Any]
+                : cost["context_over_200k"] as? [String: Any] ?? tier
+            {
                 threshold = ((over["tier"] as? [String: Any])?["size"] as? Int) ?? 200_000
                 above = .init(
                     input: over["input"] as? Double ?? input,

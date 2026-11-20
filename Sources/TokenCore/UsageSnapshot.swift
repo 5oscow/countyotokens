@@ -38,6 +38,8 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
         public var model: String
         public var cost: Double
         public var share: Double
+        /// Set when nothing had a price, so the share is of tokens instead.
+        public var byTokens: Bool?
     }
 
     public static let historyDays = 30
@@ -56,6 +58,11 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
     public var currentWindow: Window? { self.windows.first }
     public var historyCost: Double { self.days.reduce(0) { $0 + $1.cost } }
     public var historyTokens: Int { self.days.reduce(0) { $0 + $1.tokens } }
+    /// Nothing carried a price (a subscription that records $0): measure in tokens instead.
+    public var measuresTokens: Bool {
+        self.days.allSatisfy { $0.cost == 0 } && self.windows.allSatisfy { $0.cost == 0 }
+            && (self.historyTokens > 0 || self.windows.contains { $0.tokens > 0 })
+    }
 
     /// Earliest instant any figure on the card needs.
     static func horizon(now: Date, settings: WindowSettings, calendar: Calendar) -> Date {
@@ -93,6 +100,7 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
         }
 
         var modelCost: [String: Double] = [:]
+        var modelTokens: [String: Int] = [:]
         var unpriced = 0
         forEachRow { row in
             let ts = row.timestampMs
@@ -107,6 +115,7 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
                 days[low].tokens += row.tokens
                 days[low].cost += row.cost ?? 0
                 modelCost[row.model, default: 0] += row.cost ?? 0
+                modelTokens[row.model, default: 0] += row.tokens
                 if row.cost == nil { unpriced += 1 }
             }
             if ts < currentEndMs {
@@ -119,12 +128,18 @@ public struct UsageSnapshot: Codable, Sendable, Equatable {
         }
 
         let total = modelCost.values.reduce(0, +)
-        let top = modelCost.max { $0.value < $1.value }
+        let totalTokens = modelTokens.values.reduce(0, +)
+        var topModel: ModelShare?
+        if total > 0, let top = modelCost.max(by: { $0.value < $1.value }) {
+            topModel = ModelShare(model: top.key, cost: top.value, share: top.value / total)
+        } else if totalTokens > 0, let top = modelTokens.max(by: { $0.value < $1.value }) {
+            topModel = ModelShare(model: top.key, cost: 0, share: Double(top.value) / Double(totalTokens), byTokens: true)
+        }
         return UsageSnapshot(
             generatedAt: now,
             days: days,
             windows: windows,
-            topModel: top.flatMap { total > 0 ? ModelShare(model: $0.key, cost: $0.value, share: $0.value / total) : nil },
+            topModel: topModel,
             unpricedResponses: unpriced)
     }
 }
@@ -139,17 +154,19 @@ extension UsageSnapshot {
 // MARK: - Persistence
 
 extension UsageSnapshot {
-    static var cacheURL: URL { AppPaths.support.appendingPathComponent("snapshot.json") }
+    static func cacheURL(_ provider: ProviderID) -> URL {
+        AppPaths.support.appendingPathComponent("snapshot-\(provider.rawValue).json")
+    }
 
     /// Last computed snapshot, shown instantly at launch before the first scan finishes.
-    public static func loadCached() -> UsageSnapshot? {
-        guard let data = try? Data(contentsOf: self.cacheURL) else { return nil }
+    public static func loadCached(_ provider: ProviderID) -> UsageSnapshot? {
+        guard let data = try? Data(contentsOf: self.cacheURL(provider)) else { return nil }
         return try? JSONDecoder().decode(UsageSnapshot.self, from: data)
     }
 
-    public func saveCache() {
+    public func saveCache(_ provider: ProviderID) {
         guard let data = try? JSONEncoder().encode(self) else { return }
         try? FileManager.default.createDirectory(at: AppPaths.support, withIntermediateDirectories: true)
-        try? data.write(to: Self.cacheURL, options: .atomic)
+        try? data.write(to: UsageSnapshot.cacheURL(provider), options: .atomic)
     }
 }

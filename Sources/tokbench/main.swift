@@ -4,16 +4,34 @@ import TokenCore
 // Times the refresh path: a cold scan, then warm rescans. With an interval, warm scans are spaced
 // out so they pick up whatever Claude appended meanwhile (the common case while you work).
 // Usage: tokbench [warm-iterations] [interval-seconds]   |   tokbench limits
-if CommandLine.arguments.dropFirst().first == "limits" {
-    let started = ContinuousClock.now
-    do {
-        let limits = try await LimitsClient.fetch()
-        print("fetched in \(started.duration(to: .now))")
-        for limit in limits.all {
-            print("\(limit.title.padding(toLength: 14, withPad: " ", startingAt: 0)) \(Int(limit.leftPercent.rounded()))% left · resets \(limit.resetsAt.map { "\($0)" } ?? "—")")
+let command = CommandLine.arguments.dropFirst().first
+if command == "limits" || command == "spend" {
+    let ids = CommandLine.arguments.dropFirst(2).compactMap(ProviderID.init(rawValue:))
+    for id in ids.isEmpty ? [ProviderID.claude] : ids {
+        let started = ContinuousClock.now
+        if command == "spend" {
+            let source: SpendSource? = switch id {
+            case .claude: LogScanner()
+            case .codex: CodexScanner()
+            case .opencodeGo: OpenCodeSpend.go
+            case .zen: OpenCodeSpend.zen
+            default: nil
+            }
+            guard let source else { print("\(id.rawValue): no local spend"); continue }
+            let snapshot = source.spend(now: Date(), settings: WindowSettings(anchor: Date()), calendar: .current)
+            print("\(id.rawValue) spend in \(started.duration(to: .now)): 30d $\(String(format: "%.2f", snapshot.historyCost)) · \(snapshot.historyTokens) tokens · today \(snapshot.today?.tokens ?? 0) · top \(snapshot.topModel?.model ?? "-")")
+            continue
         }
-    } catch {
-        print("limits failed: \(error)")
+        let credentials = ProviderCredentials(devinToken: nil, devinOrganization: DevinLimits.cliOrganization(), droidAPIKey: DroidLimits.environmentKey())
+        do {
+            let limits = try await ProviderLimits.fetch(id, credentials: credentials)
+            print("\(id.rawValue) limits in \(started.duration(to: .now)) plan=\(limits.plan ?? "-")")
+            for limit in limits.items {
+                print("  \(limit.title.padding(toLength: 14, withPad: " ", startingAt: 0)) \(Int(limit.leftPercent.rounded()))% left · resets \(limit.resetsAt.map { "\($0)" } ?? "—")")
+            }
+        } catch {
+            print("\(id.rawValue) limits: \(error)")
+        }
     }
     exit(0)
 }

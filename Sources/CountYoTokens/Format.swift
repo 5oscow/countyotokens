@@ -26,8 +26,12 @@ enum Format {
         return "\(value)"
     }
 
-    /// `claude-opus-5-5` → `Opus 5.5`.
+    /// `claude-opus-5-5` → `Opus 5.5`; `gpt-5.5` → `GPT-5.5`; `deepseek-v4.1-flash` → `Deepseek V4.1 Flash`.
     static func model(_ id: String) -> String {
+        if id.hasPrefix("gpt-") { return "GPT-" + id.dropFirst(4) }
+        guard id.hasPrefix("claude-") else {
+            return id.split(separator: "-").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
+        }
         var parts = id.split(separator: "-").map(String.init)
         if parts.first == "claude" { parts.removeFirst() }
         guard let family = parts.first else { return id }

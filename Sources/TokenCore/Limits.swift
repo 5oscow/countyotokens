@@ -1,30 +1,37 @@
 import Foundation
 
-/// The plan's rate limits as Anthropic reports them: the 5-hour session, the weekly limit, and any
-/// model-scoped weekly limits (Fable). Percentages are "used", 0–100.
+/// A provider's rate limits as its service reports them: rolling windows (5-hour session, weekly,
+/// monthly, daily) and model-scoped ones. Percentages are "used", 0–100.
 public struct PlanLimits: Codable, Equatable, Sendable {
     public struct Limit: Codable, Equatable, Sendable, Identifiable {
         public var id: String
         public var title: String
         public var usedPercent: Double
         public var resetsAt: Date?
+        /// Window length, when known; pace needs it.
+        public var duration: TimeInterval?
+
+        public init(id: String, title: String, usedPercent: Double, resetsAt: Date?, duration: TimeInterval?) {
+            self.id = id
+            self.title = title
+            self.usedPercent = usedPercent
+            self.resetsAt = resetsAt
+            self.duration = duration
+        }
 
         public var leftPercent: Double { min(100, max(0, 100 - self.usedPercent)) }
 
-        /// Session limits span 5 hours, every other limit a week.
-        public var duration: TimeInterval { self.id == "session" ? 5 * 3600 : 7 * 86_400 }
-
         /// How usage compares with an even spread across the window (CodexBar's pace rules).
         public func pace(now: Date) -> Pace? {
-            guard let reset = self.resetsAt else { return nil }
+            guard let reset = self.resetsAt, let duration = self.duration, duration > 0 else { return nil }
             let untilReset = reset.timeIntervalSince(now)
-            guard untilReset > 0, untilReset <= self.duration else { return nil }
-            let elapsed = self.duration - untilReset
-            let expected = min(100, max(0, elapsed / self.duration * 100))
+            guard untilReset > 0, untilReset <= duration else { return nil }
+            let elapsed = duration - untilReset
+            let expected = min(100, max(0, elapsed / duration * 100))
             let actual = min(100, max(0, self.usedPercent))
             if elapsed == 0, actual > 0 { return nil }
-            // Too early in a session to say anything useful, or nothing left to pace.
-            if self.id == "session", expected < 3 || actual >= 100 { return nil }
+            // Too early in a short window to say anything useful, or nothing left to pace.
+            if duration <= 6 * 3600, expected < 3 || actual >= 100 { return nil }
             let delta = actual - expected
             var runsOutIn: TimeInterval?
             if actual >= 100 {
@@ -48,67 +55,78 @@ public struct PlanLimits: Codable, Equatable, Sendable {
         public var isOnPace: Bool { abs(self.deltaPercent) <= 2 || Int(abs(self.deltaPercent).rounded()) == 0 }
     }
 
-    public var session: Limit?
-    public var weekly: Limit?
-    public var scoped: [Limit]
+    public var items: [Limit]
+    /// Plan name when the service reports one ("Plus", "Pro").
+    public var plan: String?
     public var fetchedAt: Date
 
-    public var all: [Limit] { [self.session, self.weekly].compactMap(\.self) + self.scoped }
-
-    public static func placeholder() -> PlanLimits {
-        PlanLimits(
-            session: Limit(id: "session", title: "Session", usedPercent: 0, resetsAt: nil),
-            weekly: Limit(id: "weekly", title: "Weekly", usedPercent: 0, resetsAt: nil),
-            scoped: [],
-            fetchedAt: .distantPast)
+    public init(items: [Limit], plan: String? = nil, fetchedAt: Date = Date()) {
+        self.items = items
+        self.plan = plan
+        self.fetchedAt = fetchedAt
     }
 
-    static var cacheURL: URL { AppPaths.support.appendingPathComponent("limits.json") }
+    /// The weekly window's reset, which pins that provider's weekly spend windows.
+    public var weeklyReset: Date? {
+        self.items.first { $0.duration == Window.week }?.resetsAt
+    }
 
-    public static func loadCached() -> PlanLimits? {
-        guard let data = try? Data(contentsOf: self.cacheURL) else { return nil }
+    public enum Window {
+        public static let session: TimeInterval = 5 * 3600
+        public static let day: TimeInterval = 86_400
+        public static let week: TimeInterval = 7 * 86_400
+        public static let month: TimeInterval = 30 * 86_400
+    }
+
+    public static func placeholder() -> PlanLimits {
+        PlanLimits(items: [
+            Limit(id: "session", title: "Session", usedPercent: 0, resetsAt: nil, duration: Window.session),
+            Limit(id: "weekly", title: "Weekly", usedPercent: 0, resetsAt: nil, duration: Window.week),
+        ], fetchedAt: .distantPast)
+    }
+
+    static func cacheURL(_ provider: ProviderID) -> URL {
+        AppPaths.support.appendingPathComponent("limits-\(provider.rawValue).json")
+    }
+
+    public static func loadCached(_ provider: ProviderID) -> PlanLimits? {
+        guard let data = try? Data(contentsOf: self.cacheURL(provider)) else { return nil }
         return try? JSONDecoder().decode(PlanLimits.self, from: data)
     }
 
-    public func saveCache() {
+    public func saveCache(_ provider: ProviderID) {
         guard let data = try? JSONEncoder().encode(self) else { return }
         try? FileManager.default.createDirectory(at: AppPaths.support, withIntermediateDirectories: true)
-        try? data.write(to: Self.cacheURL, options: .atomic)
+        try? data.write(to: PlanLimits.cacheURL(provider), options: .atomic)
     }
 }
 
 public enum LimitsError: Error, Equatable, Sendable {
-    /// No Claude Code sign-in found on this Mac.
+    /// The provider's own app or CLI isn't signed in on this Mac.
     case signedOut
-    /// The token was rejected (expired); Claude Code renews it next time it runs.
+    /// A token or key has to be pasted into Settings first.
+    case needsKey
+    /// The credential was rejected.
     case expired
     case rateLimited(retryAfter: TimeInterval)
     case failed
 }
 
-/// Reads Claude Code's own OAuth token and asks Anthropic for the plan's limits. The token is only
-/// ever sent to api.anthropic.com, never stored, logged or refreshed here (refreshing would rotate
-/// Claude Code's refresh token from under it).
-public enum LimitsClient {
-    static let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
-    static let keychainService = "Claude Code-credentials"
+/// Shared plumbing for the limit fetchers: one ephemeral session, uniform status handling, and
+/// lenient JSON readers.
+enum HTTP {
+    static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
+        configuration.timeoutIntervalForRequest = 20
+        return URLSession(configuration: configuration)
+    }()
 
-    struct Credentials {
-        var accessToken: String
-        var expiresAt: Date?
-    }
-
-    public static func fetch() async throws(LimitsError) -> PlanLimits {
-        guard let credentials = self.readCredentials() else { throw .signedOut }
-        if let expiry = credentials.expiresAt, expiry < Date() { throw .expired }
-
-        var request = URLRequest(url: self.endpoint, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
-        request.setValue("Bearer \(credentials.accessToken)", forHTTPHeaderField: "Authorization")
+    static func json(_ url: URL, headers: [String: String]) async throws(LimitsError) -> [String: Any] {
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
-        request.setValue("claude-cli/2.1.0 (external, cli)", forHTTPHeaderField: "User-Agent")
-
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         let data: Data
         let response: URLResponse
         do {
@@ -118,58 +136,31 @@ public enum LimitsClient {
         }
         guard let http = response as? HTTPURLResponse else { throw .failed }
         switch http.statusCode {
-        case 200: break
+        case 200 ..< 300: break
         case 401, 403: throw .expired
         case 429:
             let retry = http.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init) ?? 300
             throw .rateLimited(retryAfter: max(60, retry))
         default: throw .failed
         }
-        guard let limits = self.parse(data, now: Date()) else { throw .failed }
-        return limits
+        guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { throw .failed }
+        return object
     }
+}
 
-    private static let session: URLSession = {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.urlCache = nil
-        configuration.httpCookieStorage = nil
-        return URLSession(configuration: configuration)
-    }()
-
-    // MARK: Parsing
-
-    static func parse(_ data: Data, now: Date) -> PlanLimits? {
-        guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
-        func window(_ key: String, id: String, title: String) -> PlanLimits.Limit? {
-            guard let entry = json[key] as? [String: Any], let used = self.number(entry["utilization"]) else { return nil }
-            return PlanLimits.Limit(id: id, title: title, usedPercent: used, resetsAt: self.date(entry["resets_at"]))
-        }
-        var scoped: [PlanLimits.Limit] = []
-        for case let entry as [String: Any] in json["limits"] as? [Any] ?? [] {
-            guard entry["group"] as? String == "weekly", entry["kind"] as? String == "weekly_scoped",
-                  let used = self.number(entry["percent"]),
-                  let model = (entry["scope"] as? [String: Any])?["model"] as? [String: Any],
-                  let name = (model["display_name"] as? String)?.trimmingCharacters(in: .whitespaces), !name.isEmpty
-            else { continue }
-            let id = "weekly-" + ((model["id"] as? String) ?? name).lowercased()
-            guard !scoped.contains(where: { $0.id == id }) else { continue }
-            scoped.append(PlanLimits.Limit(id: id, title: "\(name) weekly", usedPercent: used, resetsAt: self.date(entry["resets_at"])))
-        }
-        let limits = PlanLimits(
-            session: window("five_hour", id: "session", title: "Session"),
-            weekly: window("seven_day", id: "weekly", title: "Weekly"),
-            scoped: scoped,
-            fetchedAt: now)
-        return limits.all.isEmpty ? nil : limits
-    }
-
-    private static func number(_ value: Any?) -> Double? {
+enum JSONValue {
+    static func number(_ value: Any?) -> Double? {
+        if let string = value as? String { return Double(string) }
         guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
         let double = number.doubleValue
         return double.isFinite ? double : nil
     }
 
-    private static func date(_ value: Any?) -> Date? {
+    /// ISO 8601 strings (with or without fractional seconds), or Unix seconds / milliseconds.
+    static func date(_ value: Any?) -> Date? {
+        if let seconds = self.number(value), !(value is String) {
+            return Date(timeIntervalSince1970: seconds > 1e12 ? seconds / 1000 : seconds)
+        }
         guard let string = value as? String else { return nil }
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -178,38 +169,8 @@ public enum LimitsClient {
         return formatter.date(from: string)
     }
 
-    // MARK: Credentials
-
-    /// Claude Code keeps its sign-in in the login Keychain, written with `/usr/bin/security`. Reading it
-    /// through the same tool matches the item's access list, so macOS doesn't prompt.
-    static func readCredentials() -> Credentials? {
-        if let data = self.keychainItem(), let credentials = self.parseCredentials(data) { return credentials }
-        let root = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"].map { URL(fileURLWithPath: $0) }
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude")
-        guard let data = try? Data(contentsOf: root.appendingPathComponent(".credentials.json")) else { return nil }
-        return self.parseCredentials(data)
-    }
-
-    private static func keychainItem() -> Data? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        process.arguments = ["find-generic-password", "-s", self.keychainService, "-a", NSUserName(), "-w"]
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return nil }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return process.terminationStatus == 0 ? data : nil
-    }
-
-    static func parseCredentials(_ data: Data) -> Credentials? {
-        guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let oauth = json["claudeAiOauth"] as? [String: Any],
-              let token = (oauth["accessToken"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !token.isEmpty
-        else { return nil }
-        let expiry = self.number(oauth["expiresAt"]).map { Date(timeIntervalSince1970: $0 / 1000) }
-        return Credentials(accessToken: token, expiresAt: expiry)
+    static func string(_ value: Any?) -> String? {
+        guard let string = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !string.isEmpty else { return nil }
+        return string
     }
 }
