@@ -56,6 +56,22 @@ enum Format {
         return "\(max(1, minutes))m"
     }
 
+    /// `resets in 2h 5m`, or with the clock style `resets 14:30`, `resets Fri 09:00`, `resets 2 Dec`.
+    static func reset(_ date: Date, now: Date, style: ResetStyle, verb: String = "resets") -> String {
+        switch style {
+        case .countdown:
+            return "\(verb) in \(self.countdown(to: date, from: now))"
+        case .clock:
+            let calendar = Calendar.current
+            let time = date.formatted(date: .omitted, time: .shortened)
+            if calendar.isDate(date, inSameDayAs: now) { return "\(verb) \(time)" }
+            if date.timeIntervalSince(now) < 6 * 86_400 {
+                return "\(verb) \(date.formatted(.dateTime.weekday(.abbreviated))) \(time)"
+            }
+            return "\(verb) \(date.formatted(.dateTime.day().month(.abbreviated)))"
+        }
+    }
+
     static func updated(_ date: Date?, now: Date) -> String {
         guard let date else { return "Not scanned yet" }
         let seconds = now.timeIntervalSince(date)

@@ -21,24 +21,27 @@ enum Snapshots {
                     try? await Task.sleep(for: .milliseconds(200))
                     self.render(MenuPreview(), store: store, appearance: appearance, to: "\(folder)/menu-\(id.rawValue)-\(suffix).png")
                 }
-                self.render(GeneralPane(), store: store, appearance: appearance, to: "\(folder)/settings-general-\(suffix).png")
-                for id in [ProviderID.claude, .opencodeGo, .devin] {
-                    self.render(ProvidersPane(selection: id), store: store, appearance: appearance,
-                                to: "\(folder)/settings-providers-\(id.rawValue)-\(suffix).png")
+                let panes = SettingsPane.top + [.provider(.claude), .provider(.opencodeGo), .provider(.devin)] + SettingsPane.bottom
+                for pane in panes {
+                    store.settingsPane = pane
+                    try? await Task.sleep(for: .milliseconds(150))
+                    let name = pane.title.lowercased().replacingOccurrences(of: " ", with: "-")
+                    self.render(SettingsView(), store: store, appearance: appearance,
+                                size: NSSize(width: 800, height: 580), to: "\(folder)/settings-\(name)-\(suffix).png")
                 }
-                self.render(AboutPane(), store: store, appearance: appearance, to: "\(folder)/settings-about-\(suffix).png")
             }
             store.selected = original
             NSApp.terminate(nil)
         }
     }
 
-    private static func render(_ view: some View, store: UsageStore, appearance: NSAppearance.Name, to path: String) {
+    private static func render(_ view: some View, store: UsageStore, appearance: NSAppearance.Name,
+                               size: NSSize? = nil, to path: String) {
         let host = NSHostingView(rootView: view
             .environment(store)
             .background(Color(nsColor: .windowBackgroundColor)))
         host.appearance = NSAppearance(named: appearance)
-        host.frame.size = host.fittingSize
+        host.frame.size = size ?? host.fittingSize
         // Lists only draw inside a window; this one is never shown.
         let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: appearance)
@@ -62,11 +65,12 @@ private struct MenuPreview: View {
         VStack(alignment: .leading, spacing: 0) {
             if self.store.enabled.count > 1 { SwitcherSection(); Separator() }
             HeaderSection()
-            if id.hasLimits { Separator(); LimitsSection() }
+            let prefs = self.store.prefs
+            if id.hasLimits, prefs.showsLimits { Separator(); LimitsSection() }
             if id.hasSpend {
-                Separator(); HeroSection()
-                Separator(); HistorySection()
-                Separator(); WindowsSection()
+                if prefs.showsToday { Separator(); HeroSection() }
+                if prefs.showsHistory { Separator(); HistorySection() }
+                if prefs.showsWindows { Separator(); WindowsSection() }
             }
             Separator()
             FooterSection()

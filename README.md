@@ -27,21 +27,33 @@ on free models, say), figures are shown in tokens instead.
 Credentials are only read, never refreshed or written back: Claude Code's Keychain item through
 `/usr/bin/security` (which that item already trusts, so there is no prompt), Codex's `auth.json`,
 OpenCode's `credential` table (read-only SQLite). Keys pasted into Settings are stored in the login
-Keychain the same way. Each token goes only to its own provider. Limits refresh every 3 minutes and
-when the menu opens (at most once a minute), and back off when a server asks. Weekly spend windows
-follow each provider's reported weekly reset (Monday 00:00 otherwise).
+Keychain the same way. Each token goes only to its own provider. Limits refresh every 3 minutes by
+default and when the menu opens (at most once a minute), and back off when a server asks. Weekly
+spend windows follow each provider's reported weekly reset (Monday 00:00 otherwise), or a weekday
+picked in Settings.
 
 Prices come from the models.dev `anthropic` and `openai` catalogs: a snapshot is bundled and
 refreshed at most once a day.
 
 ## Settings
 
-Menu → **Settings…** (⌘,):
+Menu → **Settings…** (⌘,) opens a sidebar window, brought to the front on whichever Space you're on:
 
-- **General**: what sits next to the icon (nothing, today's spend, or the lowest limit left) and
-  open at login.
-- **Providers**: turn each provider on or off, see where its figures come from and whether it is
-  connected, and paste the Devin token or Factory API key.
+- **General**: open at login; how often plan limits are checked (2–15 minutes, or only on request)
+  and whether opening the menu checks too; refresh everything now; which day weekly windows start
+  (each plan's weekly reset, or a fixed weekday).
+- **Menu Bar**: a live preview; the icon (tally marks, or a meter that fills with the first two
+  limits left); what sits next to it (nothing, today's spend, this window's spend, or the lowest
+  limit left) and which provider it follows; turning it red under 10% left.
+- **Menu**: show or hide each section (limits, pace, today and this window, last 30 days, weekly
+  windows, top model); limits as percent left or used; resets as time remaining or date and time;
+  hide the email address for screen sharing.
+- **Notifications**: when a limit runs low (50, 25, 20, 10 or 5% left), when a low limit resets,
+  and when a day's spend passes an amount. Each fires once per window or day. A test button.
+- **Providers**, one pane each, dragged to set the switcher order: show it in the menu or not, its
+  limits and spend right now, plan and account, where figures come from, the Devin token or Factory
+  API key, a link to the provider's usage page, and refresh now.
+- **Advanced**: update model prices now, show the data folder, remove saved keys, reset settings.
 - **About**.
 
 ## Build
@@ -53,6 +65,7 @@ swift run -c release tokbench 5   # times a cold scan and five warm refreshes
 swift run -c release tokbench limits claude codex opencode-go devin droid  # fetches limits once
 swift run -c release tokbench spend claude codex opencode-go zen         # one spend scan each
 .build/release/CountYoTokens -snapshot <folder>   # draws every menu and Settings pane to PNGs
+"/Applications/count yo tokens.app/Contents/MacOS/CountYoTokens" -openSettings menu-bar  # opens a pane
 ```
 
 Requires macOS 15 and Swift 6.

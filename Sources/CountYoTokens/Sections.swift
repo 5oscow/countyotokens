@@ -98,7 +98,7 @@ struct HeaderSection: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            Text(self.model.subtitle)
+            Text(self.model.subtitle(hidingEmail: self.store.prefs.hidesEmail))
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -116,11 +116,12 @@ struct LimitsSection: View {
 
     var body: some View {
         let limits = self.model.limits
+        let prefs = self.store.prefs
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 SectionTitle(text: "Limits")
                 Spacer()
-                Text("left")
+                Text(prefs.limitFigure == .left ? "left" : "used")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
             }
@@ -134,7 +135,8 @@ struct LimitsSection: View {
                 TimelineView(.periodic(from: .now, by: 30)) { context in
                     VStack(spacing: 11) {
                         ForEach((limits ?? .placeholder()).items) { limit in
-                            LimitRow(limit: limit, now: context.date)
+                            LimitRow(limit: limit, now: context.date, figure: prefs.limitFigure,
+                                     resetStyle: prefs.resetStyle, showsPace: prefs.showsPace)
                         }
                     }
                 }
@@ -156,13 +158,18 @@ struct LimitsSection: View {
 private struct LimitRow: View {
     let limit: PlanLimits.Limit
     let now: Date
+    let figure: LimitFigure
+    let resetStyle: ResetStyle
+    let showsPace: Bool
 
     /// Once the reset passes, the stored figure is stale and the limit is full again.
     private var hasReset: Bool { self.limit.resetsAt.map { $0 <= self.now } ?? false }
     private var left: Double { self.hasReset ? 100 : self.limit.leftPercent }
+    /// What the row shows and the bar fills to: percent left, or percent used.
+    private var shown: Double { self.figure == .left ? self.left : 100 - self.left }
 
     var body: some View {
-        let pace = self.hasReset ? nil : self.limit.pace(now: self.now)
+        let pace = self.hasReset || !self.showsPace ? nil : self.limit.pace(now: self.now)
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(self.limit.title)
@@ -173,10 +180,10 @@ private struct LimitRow: View {
                     .foregroundStyle(.tertiary)
                     .contentTransition(.numericText())
                     .help(self.limit.resetsAt.map { "Resets \($0.formatted(.dateTime.weekday(.wide).day().month().hour().minute()))" } ?? "")
-                Text("\(Int(self.left.rounded()))%")
+                Text("\(Int(self.shown.rounded()))%")
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(self.isLow ? AnyShapeStyle(Color.red) : AnyShapeStyle(.primary))
-                    .contentTransition(.numericText(value: self.left))
+                    .contentTransition(.numericText(value: self.shown))
                     .frame(width: 40, alignment: .trailing)
             }
             .monospacedDigit()
@@ -185,13 +192,13 @@ private struct LimitRow: View {
                     Capsule().fill(Color.primary.opacity(0.08))
                     Capsule()
                         .fill(self.isLow ? AnyShapeStyle(Color.red) : AnyShapeStyle(Theme.accent))
-                        .frame(width: max(3, proxy.size.width * self.left / 100))
+                        .frame(width: max(3, proxy.size.width * self.shown / 100))
                     // Pace mark: where the bar would end if usage were spread evenly.
                     if let pace {
                         Capsule()
                             .fill(Color.primary.opacity(0.55))
                             .frame(width: 1.5, height: 7)
-                            .offset(x: proxy.size.width * (100 - pace.expectedUsedPercent) / 100 - 0.75)
+                            .offset(x: proxy.size.width * self.paceMark(pace) / 100 - 0.75)
                     }
                 }
             }
@@ -207,10 +214,14 @@ private struct LimitRow: View {
 
     private var isLow: Bool { self.left < 10 }
 
+    private func paceMark(_ pace: PlanLimits.Pace) -> Double {
+        self.figure == .left ? 100 - pace.expectedUsedPercent : pace.expectedUsedPercent
+    }
+
     private var resetText: String {
         guard let reset = self.limit.resetsAt else { return "" }
         if self.hasReset { return "reset" }
-        return "resets in \(Format.countdown(to: reset, from: self.now))"
+        return Format.reset(reset, now: self.now, style: self.resetStyle)
     }
 }
 
@@ -356,7 +367,8 @@ struct WindowsSection: View {
                 Spacer()
                 if let end = snapshot.currentWindow?.end {
                     TimelineView(.periodic(from: .now, by: 30)) { context in
-                        Text("\(self.model.id.hasLimits ? "resets" : "ends") in \(Format.countdown(to: end, from: context.date))")
+                        Text(Format.reset(end, now: context.date, style: self.store.prefs.resetStyle,
+                                          verb: self.model.id.hasLimits ? "resets" : "ends"))
                             .font(.system(size: 11))
                             .foregroundStyle(.tertiary)
                             .monospacedDigit()
@@ -432,7 +444,7 @@ struct FooterSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            if self.model.id.hasSpend {
+            if self.model.id.hasSpend, self.store.prefs.showsTopModel {
             HStack(spacing: 4) {
                 Text("Top model")
                     .foregroundStyle(.secondary)

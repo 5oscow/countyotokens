@@ -33,6 +33,8 @@ final class ProviderModel: Identifiable {
     @ObservationIgnored private var limitsTask: Task<Void, Never>?
     @ObservationIgnored private var limitsCheckedAt = Date.distantPast
     @ObservationIgnored let credentials: () -> ProviderCredentials
+    /// Set when Settings pins weekly windows to a weekday instead of the plan's reset.
+    @ObservationIgnored private var fixedWeekday: Int?
 
     /// Persisted, so relaunching doesn't hammer an endpoint that asked us to back off.
     @ObservationIgnored private var limitsBlockedUntil: Date {
@@ -47,8 +49,9 @@ final class ProviderModel: Identifiable {
         self.source = source
         self.credentials = credentials
         self.scanQueue = DispatchQueue(label: "countyotokens.scan.\(id.rawValue)", qos: .userInitiated)
-        let stored = UserDefaults.standard.object(forKey: "windowAnchor.\(id.rawValue)") as? Double
-        self.windowSettings = WindowSettings(anchor: stored.map(Date.init(timeIntervalSince1970:)) ?? Self.defaultAnchor(for: id))
+        let weekday = UserDefaults.standard.integer(forKey: "weekStart")
+        self.fixedWeekday = (1 ... 7).contains(weekday) ? weekday : nil
+        self.windowSettings = WindowSettings(anchor: self.fixedWeekday.map(Self.weekStart) ?? Self.planAnchor(for: id))
         self.snapshot = UsageSnapshot.loadCached(id)
         self.updatedAt = self.snapshot?.generatedAt
         self.limits = PlanLimits.loadCached(id)
@@ -56,12 +59,30 @@ final class ProviderModel: Identifiable {
         if id == .claude { self.account = Account.load() }
     }
 
-    /// Claude's reset when this fork was made; everyone else starts on Monday until told otherwise.
-    private static func defaultAnchor(for id: ProviderID) -> Date {
+    /// The last weekly reset the plan reported. Before any, Claude's reset when this fork was made;
+    /// everyone else starts on Monday until told otherwise.
+    private static func planAnchor(for id: ProviderID) -> Date {
+        if let stored = UserDefaults.standard.object(forKey: "windowAnchor.\(id.rawValue)") as? Double {
+            return Date(timeIntervalSince1970: stored)
+        }
         if id == .claude { return Date(timeIntervalSince1970: 1_795_229_999) } // Fri 21 Nov 2026 02:59:59 UTC
+        return self.weekStart(2)
+    }
+
+    /// Midnight at the start of this week, for a week starting on `weekday` (1 = Sunday).
+    static func weekStart(_ weekday: Int) -> Date {
         var calendar = Calendar.current
-        calendar.firstWeekday = 2
+        calendar.firstWeekday = weekday
         return calendar.dateInterval(of: .weekOfYear, for: Date())?.start ?? Date()
+    }
+
+    /// Settings changed the week start: 1…7 pins a weekday, nil goes back to the plan's reset.
+    func setWeekStart(_ weekday: Int?) {
+        self.fixedWeekday = weekday
+        let anchor = weekday.map(Self.weekStart) ?? self.limits?.weeklyReset ?? Self.planAnchor(for: self.id)
+        guard anchor != self.windowSettings.anchor else { return }
+        self.windowSettings = WindowSettings(anchor: anchor)
+        self.refresh()
     }
 
     // MARK: Lifecycle
@@ -183,12 +204,13 @@ final class ProviderModel: Identifiable {
 
     /// Windows are counted from the reported weekly reset; only move them if it really changed.
     private func adoptWeeklyReset(_ reset: Date) {
+        UserDefaults.standard.set(reset.timeIntervalSince1970, forKey: self.anchorKey)
+        guard self.fixedWeekday == nil else { return }
         let week = WindowSettings.length
         let offset = (reset.timeIntervalSince(self.windowSettings.anchor).truncatingRemainder(dividingBy: week) + week)
             .truncatingRemainder(dividingBy: week)
         guard min(offset, week - offset) > 60 else { return }
         self.windowSettings = WindowSettings(anchor: reset)
-        UserDefaults.standard.set(reset.timeIntervalSince1970, forKey: self.anchorKey)
         self.refresh()
     }
 
@@ -215,33 +237,22 @@ final class ProviderModel: Identifiable {
     }
 }
 
-enum MenuBarDisplay: String, CaseIterable, Identifiable {
-    case icon, spend, limit
-    var id: String { self.rawValue }
-    var title: String {
-        switch self {
-        case .icon: "Icon only"
-        case .spend: "Today's spend"
-        case .limit: "Lowest limit left"
-        }
-    }
-}
-
 /// Every provider, which ones are on, which one the menu shows, and the app's switches.
 @Observable
 @MainActor
 final class UsageStore {
     let providers: [ProviderID: ProviderModel]
 
-    /// Providers shown in the switcher, in the canonical order.
-    private(set) var enabled: [ProviderID]
+    let prefs = Preferences()
+
+    /// Providers that are switched on.
+    private var enabledSet: Set<ProviderID>
+
+    /// Providers shown in the switcher, in the order set in Settings.
+    var enabled: [ProviderID] { self.prefs.order.filter(self.enabledSet.contains) }
 
     var selected: ProviderID {
         didSet { UserDefaults.standard.set(self.selected.rawValue, forKey: Keys.selected) }
-    }
-
-    var menuBarDisplay: MenuBarDisplay {
-        didSet { UserDefaults.standard.set(self.menuBarDisplay.rawValue, forKey: Keys.menuBar) }
     }
 
     var devinOrganization: String {
@@ -262,13 +273,15 @@ final class UsageStore {
         }
     }
 
+    /// The Settings pane to show; set before opening the window to land on a provider.
+    var settingsPane: SettingsPane = .general
+
     private var loginItemRevision = 0
     @ObservationIgnored private var timer: Timer?
 
     private enum Keys {
         static let enabled = "enabledProviders"
         static let selected = "selectedProvider"
-        static let menuBar = "menuBarDisplay"
         static let devinOrganization = "devinOrganization"
     }
 
@@ -299,13 +312,12 @@ final class UsageStore {
         self.providers = models
 
         let stored = (defaults.array(forKey: Keys.enabled) as? [String])?.compactMap(ProviderID.init(rawValue:))
-        var enabled = ProviderID.allCases.filter { (stored ?? ProviderDetection.detected()).contains($0) }
-        if enabled.isEmpty { enabled = [.claude] }
-        self.enabled = enabled
-        let selected = defaults.string(forKey: Keys.selected).flatMap(ProviderID.init(rawValue:)) ?? .claude
-        self.selected = enabled.contains(selected) ? selected : enabled[0]
-        self.menuBarDisplay = defaults.string(forKey: Keys.menuBar).flatMap(MenuBarDisplay.init(rawValue:))
-            ?? (defaults.bool(forKey: "showsSpendInMenuBar") ? .spend : .icon)
+        var enabledSet = Set(stored ?? ProviderDetection.detected())
+        if enabledSet.isEmpty { enabledSet = [.claude] }
+        self.enabledSet = enabledSet
+        let first = self.prefs.order.first(where: enabledSet.contains) ?? .claude
+        let selected = defaults.string(forKey: Keys.selected).flatMap(ProviderID.init(rawValue:)) ?? first
+        self.selected = enabledSet.contains(selected) ? selected : first
         self.devinOrganization = defaults.string(forKey: Keys.devinOrganization) ?? ""
 
         for id in self.enabled { self.providers[id]?.start() }
@@ -327,14 +339,41 @@ final class UsageStore {
     private func tick() {
         for id in self.enabled {
             self.providers[id]?.refresh()
-            self.providers[id]?.refreshLimits()
+            if let age = self.prefs.limitsInterval.minimumAge { self.providers[id]?.refreshLimits(minimumAge: age) }
         }
+        Notifier.shared.check(self)
     }
 
     func menuWillOpen() {
         self.current.refresh()
-        self.current.refreshLimits(minimumAge: 60)
+        if self.prefs.refreshesOnOpen { self.current.refreshLimits(minimumAge: 60) }
         self.current.reloadAccount()
+    }
+
+    /// Every enabled provider, spend and limits, as soon as the endpoints allow.
+    func refreshAll() {
+        for id in self.enabled {
+            self.providers[id]?.refresh()
+            self.providers[id]?.refreshLimits(minimumAge: 30)
+        }
+    }
+
+    func setWeekStart(_ weekday: Int) {
+        self.prefs.weekStart = weekday
+        for model in self.providers.values { model.setWeekStart((1 ... 7).contains(weekday) ? weekday : nil) }
+    }
+
+    /// Downloads the models.dev catalog now. Returns false when it couldn't be reached.
+    func updatePrices() async -> Bool {
+        guard let prices = await PriceCatalog.refreshIfStale(maxAge: 0) else { return false }
+        for (id, model) in self.providers { model.pricesChanged(prices, refresh: self.enabled.contains(id)) }
+        return true
+    }
+
+    /// The provider the menu-bar text and meter follow.
+    var menuBarModel: ProviderModel {
+        if let id = self.prefs.menuBarProvider, self.enabledSet.contains(id), let model = self.providers[id] { return model }
+        return self.current
     }
 
     func refreshNow() {
@@ -342,13 +381,18 @@ final class UsageStore {
         self.current.refreshLimits(minimumAge: 30)
     }
 
-    func isEnabled(_ id: ProviderID) -> Bool { self.enabled.contains(id) }
+    func isEnabled(_ id: ProviderID) -> Bool { self.enabledSet.contains(id) }
+
+    /// Forgets both pasted keys.
+    func removeSecrets() {
+        for key in [Secrets.Key.devinToken, .droidAPIKey] where Secrets.get(key) != nil { _ = self.setSecret(key, "") }
+    }
 
     func setEnabled(_ id: ProviderID, _ on: Bool) {
-        var set = Set(self.enabled)
+        var set = self.enabledSet
         if on { set.insert(id) } else { set.remove(id) }
-        guard !set.isEmpty else { return } // Keep at least one.
-        self.enabled = ProviderID.allCases.filter(set.contains)
+        guard !set.isEmpty, set != self.enabledSet else { return } // Keep at least one.
+        self.enabledSet = set
         UserDefaults.standard.set(self.enabled.map(\.rawValue), forKey: Keys.enabled)
         if on {
             self.providers[id]?.start()
@@ -394,15 +438,21 @@ final class UsageStore {
 
 extension ProviderModel {
     /// Second header line: who is signed in, or where the figures come from.
-    var subtitle: String {
+    func subtitle(hidingEmail: Bool) -> String {
         switch self.id {
-        case .claude: self.account?.email ?? "Local usage"
+        case .claude: self.account?.email.map { hidingEmail ? Self.masked($0) : $0 } ?? "Local usage"
         case .codex: "Codex CLI"
         case .opencodeGo: "Subscription · OpenCode CLI"
         case .zen: "Pay as you go · OpenCode CLI"
         case .devin: "app.devin.ai"
         case .droid: "Factory"
         }
+    }
+
+    /// `m•••@gmail.com`.
+    static func masked(_ email: String) -> String {
+        guard let at = email.firstIndex(of: "@"), at > email.startIndex else { return "Email hidden" }
+        return "\(email[email.startIndex])•••\(email[at...])"
     }
 
     func message(for issue: LimitsError) -> String {
