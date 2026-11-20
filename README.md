@@ -9,7 +9,8 @@ actually needs. No upstream remote, no auto-updates.
 ## What it shows
 
 - **Plan limits**: Session (5-hour), Weekly and model-scoped weekly limits such as Fable, each with
-  the percentage left and when it resets
+  the percentage left, when it resets, and the pace: how far you are in reserve or deficit against
+  an even spread, and whether it lasts until reset or when it runs out
 - **Today** and **this window** (the current 7-day weekly-limit window): cost and tokens
 - **Last 30 days**: total, a daily bar chart (hover a bar for that day), and the daily average
 - **Weekly windows**: the current window and the three before it, each with tokens, cost and a meter

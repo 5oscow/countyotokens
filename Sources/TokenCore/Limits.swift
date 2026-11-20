@@ -10,6 +10,42 @@ public struct PlanLimits: Codable, Equatable, Sendable {
         public var resetsAt: Date?
 
         public var leftPercent: Double { min(100, max(0, 100 - self.usedPercent)) }
+
+        /// Session limits span 5 hours, every other limit a week.
+        public var duration: TimeInterval { self.id == "session" ? 5 * 3600 : 7 * 86_400 }
+
+        /// How usage compares with an even spread across the window (CodexBar's pace rules).
+        public func pace(now: Date) -> Pace? {
+            guard let reset = self.resetsAt else { return nil }
+            let untilReset = reset.timeIntervalSince(now)
+            guard untilReset > 0, untilReset <= self.duration else { return nil }
+            let elapsed = self.duration - untilReset
+            let expected = min(100, max(0, elapsed / self.duration * 100))
+            let actual = min(100, max(0, self.usedPercent))
+            if elapsed == 0, actual > 0 { return nil }
+            // Too early in a session to say anything useful, or nothing left to pace.
+            if self.id == "session", expected < 3 || actual >= 100 { return nil }
+            let delta = actual - expected
+            var runsOutIn: TimeInterval?
+            if actual >= 100 {
+                runsOutIn = 0
+            } else if elapsed > 0, actual > 0 {
+                let candidate = (100 - actual) / (actual / elapsed)
+                if candidate < untilReset { runsOutIn = candidate }
+            }
+            return Pace(expectedUsedPercent: expected, deltaPercent: delta, runsOutIn: runsOutIn)
+        }
+    }
+
+    public struct Pace: Equatable, Sendable {
+        /// Where usage would be by now if spread evenly.
+        public var expectedUsedPercent: Double
+        /// Used minus expected: negative is reserve, positive is deficit.
+        public var deltaPercent: Double
+        /// At the current rate, when the limit runs out; nil when it lasts until reset.
+        public var runsOutIn: TimeInterval?
+
+        public var isOnPace: Bool { abs(self.deltaPercent) <= 2 || Int(abs(self.deltaPercent).rounded()) == 0 }
     }
 
     public var session: Limit?

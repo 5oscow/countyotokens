@@ -120,7 +120,8 @@ private struct LimitRow: View {
     private var left: Double { self.hasReset ? 100 : self.limit.leftPercent }
 
     var body: some View {
-        VStack(spacing: 4) {
+        let pace = self.hasReset ? nil : self.limit.pace(now: self.now)
+        VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(self.limit.title)
                     .font(.system(size: 12.5))
@@ -143,9 +144,21 @@ private struct LimitRow: View {
                     Capsule()
                         .fill(self.isLow ? AnyShapeStyle(Color.red) : AnyShapeStyle(Theme.accent))
                         .frame(width: max(3, proxy.size.width * self.left / 100))
+                    // Pace mark: where the bar would end if usage were spread evenly.
+                    if let pace {
+                        Capsule()
+                            .fill(Color.primary.opacity(0.55))
+                            .frame(width: 1.5, height: 7)
+                            .offset(x: proxy.size.width * (100 - pace.expectedUsedPercent) / 100 - 0.75)
+                    }
                 }
             }
             .frame(height: 3)
+            .help(pace.map { "Even pace would leave \(Int((100 - $0.expectedUsedPercent).rounded()))% by now" } ?? "")
+            if let pace {
+                PaceLine(pace: pace, now: self.now)
+                    .transition(.opacity)
+            }
         }
     }
 
@@ -155,6 +168,36 @@ private struct LimitRow: View {
         guard let reset = self.limit.resetsAt else { return "" }
         if self.hasReset { return "reset" }
         return "resets in \(Format.countdown(to: reset, from: self.now))"
+    }
+}
+
+/// `12% in reserve · Lasts until reset`, `8% in deficit · Runs out in 1d 3h`.
+private struct PaceLine: View {
+    let pace: PlanLimits.Pace
+    let now: Date
+
+    var body: some View {
+        let delta = Int(abs(self.pace.deltaPercent).rounded())
+        HStack(spacing: 0) {
+            if self.pace.isOnPace {
+                Text("On pace")
+            } else {
+                Text("\(delta)% in \(self.pace.deltaPercent < 0 ? "reserve" : "deficit")")
+                    .foregroundStyle(self.pace.deltaPercent < 0 ? Theme.reserve : Theme.deficit)
+                    .contentTransition(.numericText(value: Double(delta)))
+            }
+            Text(" · " + self.outlook)
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(.tertiary)
+        .monospacedDigit()
+        .lineLimit(1)
+    }
+
+    private var outlook: String {
+        guard let seconds = self.pace.runsOutIn else { return "Lasts until reset" }
+        if seconds < 60 { return "Runs out now" }
+        return "Runs out in \(Format.countdown(to: self.now.addingTimeInterval(seconds), from: self.now))"
     }
 }
 
