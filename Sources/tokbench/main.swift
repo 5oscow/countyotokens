@@ -3,8 +3,16 @@ import TokenCore
 
 // Times the refresh path: a cold scan, then warm rescans. With an interval, warm scans are spaced
 // out so they pick up whatever Claude appended meanwhile (the common case while you work).
-// Usage: tokbench [warm-iterations] [interval-seconds]   |   tokbench limits   |   tokbench renew-claude
+// Usage: tokbench [warm-iterations] [interval-seconds]   |   tokbench limits   |   tokbench renew-claude   |   tokbench droid-signin
 let command = CommandLine.arguments.dropFirst().first
+if command == "droid-signin" {
+    // Which browser sign-in Droid would use: its expiry only, never the token.
+    let started = ContinuousClock.now
+    let token = DroidLimits.browserAccessToken()
+    let expiry = DroidLimits.expiry(of: token)
+    print(token == nil ? "no fresh app.factory.ai sign-in found" : "found, expires \(expiry.map { "\($0)" } ?? "?")", "in \(started.duration(to: .now))")
+    exit(0)
+}
 if command == "renew-claude" {
     // Runs Claude Code's sign-in renewal once. With a valid sign-in it can't change anything: it
     // times out after ~10 s and prints false.
@@ -30,7 +38,7 @@ if command == "limits" || command == "spend" {
             print("\(id.rawValue) spend in \(started.duration(to: .now)): 30d $\(String(format: "%.2f", snapshot.historyCost)) · \(snapshot.historyTokens) tokens · today \(snapshot.today?.tokens ?? 0) · top \(snapshot.topModel?.model ?? "-")")
             continue
         }
-        let credentials = ProviderCredentials(devinToken: nil, devinOrganization: nil, droidAPIKey: DroidLimits.environmentKey())
+        let credentials = ProviderCredentials(devinToken: nil, devinOrganization: nil, droidAPIKey: DroidLimits.environmentKey() ?? DroidLimits.browserAccessToken())
         do {
             let limits = try await ProviderLimits.fetch(id, credentials: credentials)
             print("\(id.rawValue) limits in \(started.duration(to: .now)) plan=\(limits.plan ?? "-")")

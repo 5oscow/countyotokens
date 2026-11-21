@@ -183,20 +183,10 @@ actor ClaudeRenewal {
 
     // MARK: Setup
 
-    /// Claude Code's own install places first, then the login PATH's usual homes.
-    static func claudeBinary() -> URL? {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let path = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
-        let candidates = ["\(home)/.local/bin", "\(home)/.claude/local", "/opt/homebrew/bin", "/usr/local/bin"] + path
-        for directory in candidates {
-            let file = URL(fileURLWithPath: directory).appendingPathComponent("claude")
-            if FileManager.default.isExecutableFile(atPath: file.path) { return file.resolvingSymlinksInPath() }
-        }
-        return nil
-    }
+    static func claudeBinary() -> URL? { CLITool.find("claude")?.resolvingSymlinksInPath() }
 
     private static func environment(directory: URL) -> [String: String] {
-        var environment = ProcessInfo.processInfo.environment.filter { !$0.key.hasPrefix("ANTHROPIC_") }
+        var environment = CLITool.environment(removing: "ANTHROPIC_")
         environment["PWD"] = directory.path
         environment["TERM"] = "xterm-256color"
         // A status check must never update the user's Claude Code install.

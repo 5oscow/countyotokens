@@ -95,6 +95,67 @@ public enum DroidLimits {
         return items.isEmpty ? nil : items
     }
 
+    /// The sign-in app.factory.ai keeps in a Chromium-family browser's local storage, while it's
+    /// still valid. Only the short-lived access token is read and it's never renewed from here:
+    /// renewing spends the browser's one-time refresh token, which would sign the browser out.
+    /// Local storage isn't encrypted, so no Keychain prompt.
+    public static func browserAccessToken(now: Date = Date()) -> String? {
+        let fm = FileManager.default
+        let support = fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
+        let browsers = ["Google/Chrome", "Google/Chrome Beta", "Google/Chrome Canary", "Chromium", "Arc/User Data",
+                        "BraveSoftware/Brave-Browser", "Microsoft Edge", "Dia/User Data", "net.imput.helium",
+                        "Citro Labs/ego lite", "Vivaldi"]
+        let marker = Data("workos:access-token".utf8)
+        var best: (token: String, expiry: Double)?
+        for browser in browsers {
+            let root = support.appendingPathComponent(browser)
+            guard let profiles = try? fm.contentsOfDirectory(atPath: root.path) else { continue }
+            for profile in profiles where profile == "Default" || profile.hasPrefix("Profile ") {
+                let folder = root.appendingPathComponent(profile).appendingPathComponent("Local Storage/leveldb")
+                guard let files = try? fm.contentsOfDirectory(atPath: folder.path) else { continue }
+                for file in files where file.hasSuffix(".log") || file.hasSuffix(".ldb") {
+                    let url = folder.appendingPathComponent(file)
+                    guard let size = (try? fm.attributesOfItem(atPath: url.path))?[.size] as? Int, size < 32_000_000,
+                          let raw = try? Data(contentsOf: url, options: .mappedIfSafe), raw.range(of: marker) != nil
+                    else { continue }
+                    // Values may be stored as UTF-16; dropping the zero bytes reads both forms.
+                    let text = String(decoding: raw.filter { $0 != 0 }, as: UTF8.self)
+                    for token in self.accessTokens(in: text) {
+                        guard let claims = CodexLimits.claims(token), let expiry = JSONValue.number(claims["exp"]),
+                              expiry > now.timeIntervalSince1970 + 30, expiry > (best?.expiry ?? 0)
+                        else { continue }
+                        best = (token, expiry)
+                    }
+                }
+            }
+        }
+        return best?.token
+    }
+
+    public static func expiry(of token: String?) -> Date? {
+        CodexLimits.claims(token).flatMap { JSONValue.number($0["exp"]) }.map { Date(timeIntervalSince1970: $0) }
+    }
+
+    /// JWTs stored under app.factory.ai's `workos:access-token` key.
+    static func accessTokens(in text: String) -> [String] {
+        var tokens: [String] = []
+        var searchStart = text.startIndex
+        while let key = text.range(of: "workos:access-token", range: searchStart ..< text.endIndex) {
+            searchStart = key.upperBound
+            let originStart = text.index(key.lowerBound, offsetBy: -80, limitedBy: text.startIndex) ?? text.startIndex
+            let origin = text[originStart ..< key.lowerBound]
+            guard origin.contains("factory.ai") else { continue }
+            let tail = text[key.upperBound...].prefix(4096)
+            guard let start = tail.range(of: "eyJ") else { continue }
+            let allowed = Set("-_.")
+            let token = tail[start.lowerBound...].prefix { (char: Character) -> Bool in
+                char.isASCII && (char.isLetter || char.isNumber || allowed.contains(char))
+            }
+            if token.split(separator: ".").count == 3 { tokens.append(String(token)) }
+        }
+        return tokens
+    }
+
     /// `FACTORY_API_KEY`, or the one in `~/.factory/.env`.
     public static func environmentKey() -> String? {
         if let key = JSONValue.string(ProcessInfo.processInfo.environment["FACTORY_API_KEY"]) { return key }

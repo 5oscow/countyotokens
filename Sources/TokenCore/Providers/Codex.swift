@@ -185,7 +185,20 @@ public final class CodexScanner: SpendSource, @unchecked Sendable {
 public enum CodexLimits {
     static let endpoint = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
 
+    /// The saved sign-in first (one request); when it's missing or lapsed, the Codex CLI itself,
+    /// which also renews the sign-in (or reads one kept in the Keychain).
     public static func fetch() async throws(LimitsError) -> PlanLimits {
+        do {
+            return try await self.fetchDirect()
+        } catch {
+            guard error == .expired || error == .signedOut,
+                  let limits = await CodexAppServer.shared.rateLimits()
+            else { throw error }
+            return limits
+        }
+    }
+
+    static func fetchDirect() async throws(LimitsError) -> PlanLimits {
         let url = CodexHome.url().appendingPathComponent("auth.json")
         guard let data = try? Data(contentsOf: url),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]

@@ -316,7 +316,7 @@ final class UsageStore {
                 devinOrganization: UserDefaults.standard.string(forKey: Keys.devinOrganization)
                     .flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }
                     ?? DevinLimits.cliOrganization(),
-                droidAPIKey: Secrets.get(.droidAPIKey) ?? DroidLimits.environmentKey())
+                droidAPIKey: Secrets.get(.droidAPIKey) ?? DroidLimits.environmentKey() ?? DroidLimits.browserAccessToken())
         }
         for id in ProviderID.allCases {
             let source: SpendSource? = switch id {
@@ -484,11 +484,11 @@ extension ProviderModel {
         case (.signedOut, .codex): "Sign in to Codex to see your plan limits."
         case (.signedOut, .opencodeGo): "Connect OpenCode Go in OpenCode to see your limits."
         case (.needsKey, .devin): "Sign in with the Devin CLI (devin auth login) to see your limits."
-        case (.needsKey, .droid): "Add a Factory API key in Settings to see your limits."
+        case (.needsKey, .droid): "Open app.factory.ai in your browser, or add a Factory API key in Settings."
         case (.expired, .claude): "Paused until Claude Code renews its sign-in."
         case (.expired, .codex): "Paused until Codex renews its sign-in."
         case (.expired, .devin): "Devin didn't accept the sign-in. Run devin auth login again."
-        case (.expired, .droid): "Factory didn't accept the API key."
+        case (.expired, .droid): "Factory didn't accept the sign-in or API key."
         case (.expired, _): "\(self.id.displayName) didn't accept the key."
         case (.signedOut, _), (.needsKey, _): "Sign in to \(self.id.displayName) to see your limits."
         case (.rateLimited, _), (.failed, _): "Couldn't reach \(self.id.displayName)."

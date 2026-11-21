@@ -813,7 +813,7 @@ private struct DroidCredentials: View {
         } header: {
             Text("Factory API key")
         } footer: {
-            Footnote("Create one at app.factory.ai under Settings → API keys. A key in FACTORY_API_KEY or ~/.factory/.env is used when none is saved here. Kept in your Keychain and only ever sent to api.factory.ai.")
+            Footnote("Optional. Without a key, the sign-in app.factory.ai keeps in Chrome, Arc, Brave, Edge or ego lite is used while it's fresh. For limits that never lapse, create a key at app.factory.ai under Settings → API keys, or set FACTORY_API_KEY or ~/.factory/.env. Kept in your Keychain and only ever sent to api.factory.ai.")
         }
     }
 }
