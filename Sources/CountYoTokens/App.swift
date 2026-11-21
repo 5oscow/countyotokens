@@ -1,6 +1,7 @@
 import AppKit
 import Observation
 import SwiftUI
+import TokenCore
 
 @main
 enum Main {
@@ -40,6 +41,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         Notifier.shared.start()
         self.observeLayout()
         self.observeStatusTitle()
+        if let folder = UserDefaults.standard.string(forKey: "menuProbe") {
+            self.runMenuProbe(folder: folder)
+        }
         // `-openSettings <pane>` opens Settings at launch (for checking the window without the menu).
         if let pane = UserDefaults.standard.string(forKey: "openSettings") {
             self.store.settingsPane = SettingsPane.named(pane) ?? .general
@@ -85,6 +89,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var todayItems: [NSMenuItem] = []
     private var historyItems: [NSMenuItem] = []
     private var windowItems: [NSMenuItem] = []
+    /// Every custom-view item, kept at its content's height.
+    private var viewItems: [NSMenuItem] = []
 
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
@@ -120,13 +126,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     private func viewItem(_ content: some View) -> NSMenuItem {
-        let host = NSHostingView(rootView: content
-            .environment(self.store)
-            .frame(width: Theme.menuWidth, alignment: .leading))
+        // Whenever the content's height changes: after this layout pass, never inside it.
+        let host = NSHostingView(rootView: MenuItemContent(content: content.environment(self.store)) { _ in
+            MainLoop.soon { Main.delegate.fitItems() }
+        })
         host.sizingOptions = [.intrinsicContentSize]
-        host.frame.size = host.fittingSize
+        host.frame.size = NSSize(width: Theme.menuWidth, height: host.fittingSize.height)
         let item = NSMenuItem()
         item.view = host
+        self.viewItems.append(item)
         return item
     }
 
@@ -149,15 +157,164 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 (self.historyItems, provider.hasSpend && prefs.showsHistory),
                 (self.windowItems, provider.hasSpend && prefs.showsWindows),
             ]
+            var changed = false
             for (items, shows) in groups {
-                for item in items where item.isHidden == shows { item.isHidden = !shows }
+                for item in items where item.isHidden == shows {
+                    item.isHidden = !shows
+                    changed = true
+                }
             }
+            if changed { self.refitSoon() }
         } onChange: {
-            DispatchQueue.main.async { Main.delegate.observeLayout() }
+            MainLoop.soon { Main.delegate.observeLayout() }
+        }
+    }
+
+    /// Views off screen don't lay out, so a change made while the menu was closed (another provider,
+    /// a setting) hasn't resized anything yet: size every section before the menu measures them.
+    func menuNeedsUpdate(_ menu: NSMenu) { self.fitItems() }
+
+    /// Sizes every section to the height its content wants, and tells the menu about each one that
+    /// changed so it moves the items below. The menu sizes items by their frames and never asks the
+    /// views, so this is what keeps a section from being clipped or leaving a gap.
+    func fitItems() {
+        for item in self.viewItems {
+            guard let view = item.view else { continue }
+            let height = view.fittingSize.height
+            guard height > 0, abs(view.frame.height - height) > 0.25 else { continue }
+            view.setFrameSize(NSSize(width: Theme.menuWidth, height: height))
+            // An open menu resizes the item's container but doesn't always move the items below it
+            // (`itemChanged` alone leaves them where they were). Showing or hiding an item is what
+            // makes it lay every item out again, so cycle this one, within the turn, before any draw.
+            if view.window != nil, !item.isHidden {
+                item.isHidden = true
+                item.isHidden = false
+            } else {
+                item.menu?.itemChanged(item)
+            }
+        }
+    }
+
+    /// Sections shown or hidden alongside a content change: fit now, and again once SwiftUI has laid
+    /// out the content that came with it (a section coming back from hidden reports no change).
+    private func refitSoon() {
+        self.fitItems()
+        for delay in [0.05, 0.35] {
+            let timer = Timer(timeInterval: delay, repeats: false) { _ in
+                MainActor.assumeIsolated { Main.delegate.fitItems() }
+            }
+            RunLoop.main.add(timer, forMode: .common)
         }
     }
 
     func menuWillOpen(_ menu: NSMenu) { self.store.menuWillOpen() }
+
+    // MARK: Menu probe
+
+    /// `-menuProbe <folder>`: opens the real menu for each enabled provider, first with it already
+    /// selected and then switching to it while the menu is open, and checks every view item: its
+    /// frame against the height its content wants, and that no item overlaps another or leaves the
+    /// menu. Writes `menu-probe.txt` and quits. The system menu can only be checked by opening it.
+    private func runMenuProbe(folder: String) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(6))
+            let original = self.store.selected
+            let enabled = self.store.enabled
+            var report = ""
+            for (index, id) in enabled.enumerated() {
+                self.store.selected = id
+                try? await Task.sleep(for: .seconds(1))
+                report += await self.probeOpenMenu(name: "\(id.rawValue), opened on it", switchTo: nil)
+                let other = enabled[(index + 1) % enabled.count]
+                guard other != id else { continue }
+                self.store.selected = other
+                try? await Task.sleep(for: .seconds(1))
+                report += await self.probeOpenMenu(name: "\(id.rawValue), switched from \(other.rawValue) while open", switchTo: id)
+            }
+            self.store.selected = original
+            try? report.write(toFile: "\(folder)/menu-probe.txt", atomically: true, encoding: .utf8)
+            NSApp.terminate(nil)
+        }
+    }
+
+    private var probeReport = ""
+    private var probeMainActorRan = false
+
+    /// Opens the menu from the run loop, the way a click does. Opened from inside a main-queue job
+    /// instead, the menu would hold that job for as long as it's open, and nothing else queued on
+    /// the main actor (fetched limits, rescans) could land: the probe would test a menu nobody sees.
+    private func probeOpenMenu(name: String, switchTo target: ProviderID?) async -> String {
+        await withCheckedContinuation { continuation in
+            MainLoop.soon {
+                let report = Main.delegate.trackProbeMenu(name: name, switchTo: target)
+                continuation.resume(returning: report)
+            }
+        }
+    }
+
+    private func trackProbeMenu(name: String, switchTo target: ProviderID?) -> String {
+        self.probeReport = ""
+        self.probeMainActorRan = false
+        let check = Timer(timeInterval: 0.3, repeats: false) { _ in
+            Task { @MainActor in Main.delegate.probeMainActorRan = true }
+        }
+        RunLoop.main.add(check, forMode: .common)
+        if let target {
+            let click = Timer(timeInterval: 0.8, repeats: false) { _ in
+                MainActor.assumeIsolated {
+                    withAnimation(.smooth(duration: 0.3)) { Main.delegate.store.selected = target }
+                }
+            }
+            RunLoop.main.add(click, forMode: .common)
+        }
+        // Measured late, so limits fetched on open have landed and resized whatever they resize.
+        let timer = Timer(timeInterval: 2.5, repeats: false) { _ in
+            MainActor.assumeIsolated {
+                let delegate = Main.delegate
+                guard let menu = delegate.statusItem.menu else { return }
+                delegate.probeReport = delegate.measure(menu, name: name)
+                menu.cancelTracking()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.statusItem.button?.performClick(nil)
+        return self.probeReport
+    }
+
+    private func measure(_ menu: NSMenu, name: String) -> String {
+        var lines = ["== \(name)"]
+        var problems = 0
+        var placed: [(index: Int, low: CGFloat, high: CGFloat)] = []
+        for (index, item) in menu.items.enumerated() where !item.isHidden {
+            guard let view = item.view else { continue }
+            let wants = view.fittingSize.height
+            var flags: [String] = []
+            if abs(view.frame.height - wants) > 0.5 { flags.append("WRONG HEIGHT") }
+            if let window = view.window, let content = window.contentView {
+                let rect = view.convert(view.bounds, to: content)
+                placed.append((index, rect.minY, rect.maxY))
+                if rect.minY < -0.5 || rect.maxY > content.bounds.height + 0.5 { flags.append("OUTSIDE MENU") }
+            }
+            problems += flags.count
+            let span = placed.last.map { String(format: "y %6.1f–%6.1f", $0.low, $0.high) } ?? ""
+            lines.append(String(format: "item %2d  frame %6.1f  wants %6.1f  %@  %@", index, view.frame.height, wants,
+                                span, flags.joined(separator: ", ")))
+        }
+        for (one, next) in zip(placed, placed.dropFirst()) where min(one.high, next.high) - max(one.low, next.low) > 0.5 {
+            problems += 1
+            lines.append("items \(one.index) and \(next.index) OVERLAP")
+        }
+        if let window = placed.isEmpty ? nil : menu.items.first(where: { !$0.isHidden && $0.view != nil })?.view?.window {
+            lines.append(String(format: "menu %.0f tall, screen %.0f usable", window.frame.height,
+                                window.screen?.visibleFrame.height ?? 0))
+        }
+        if !self.probeMainActorRan {
+            problems += 1
+            lines.append("main actor STALLED while the menu was open")
+        }
+        lines.append(problems == 0 ? "OK" : "\(problems) PROBLEM(S)")
+        return lines.joined(separator: "\n") + "\n"
+    }
 
     @objc private func refresh() { self.store.refreshNow() }
 
@@ -205,7 +362,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         withObservationTracking {
             self.settingsWindow?.title = self.store.settingsPane.title
         } onChange: {
-            DispatchQueue.main.async { Main.delegate.observeSettingsTitle() }
+            MainLoop.soon { Main.delegate.observeSettingsTitle() }
         }
     }
 
@@ -223,7 +380,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         withObservationTracking {
             self.updateStatusTitle()
         } onChange: {
-            DispatchQueue.main.async { Main.delegate.observeStatusTitle() }
+            MainLoop.soon { Main.delegate.observeStatusTitle() }
         }
     }
 
@@ -290,6 +447,32 @@ struct AppIconView: View {
             .shadow(color: .black.opacity(0.18), radius: self.size * 0.02, y: self.size * 0.01)
             .frame(width: self.size, height: self.size)
             .environment(\.colorScheme, .light)
+    }
+}
+
+/// Work for the main thread's next run-loop turn, in every common mode, event tracking included, so
+/// it lands while the menu is open whatever else the main queue is doing.
+enum MainLoop {
+    static func soon(_ work: @escaping @MainActor () -> Void) {
+        nonisolated(unsafe) let work = work
+        CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
+            MainActor.assumeIsolated { work() }
+        }
+        CFRunLoopWakeUp(CFRunLoopGetMain())
+    }
+}
+
+/// A menu item's SwiftUI content, laid out at its own height, saying when that height changes so
+/// the item can be refitted (see `fitItems`).
+private struct MenuItemContent<Content: View>: View {
+    let content: Content
+    let heightChanged: @MainActor (CGFloat) -> Void
+
+    var body: some View {
+        self.content
+            .frame(width: Theme.menuWidth, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { self.heightChanged($0) }
     }
 }
 

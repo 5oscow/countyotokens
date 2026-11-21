@@ -65,7 +65,17 @@ Menu → **Settings…** (⌘,) opens a sidebar window, brought to the front on 
 swift run -c release tokbench 5   # times a cold scan and five warm refreshes
 swift run -c release tokbench limits claude codex opencode-go devin droid  # fetches limits once
 swift run -c release tokbench spend claude codex opencode-go zen         # one spend scan each
-.build/release/CountYoTokens -snapshot <folder>   # draws every menu and Settings pane to PNGs
+.build/release/CountYoTokens -snapshot <folder>   # draws every menu and Settings pane to PNGs, at 2x
+"dist/count yo tokens.app/Contents/MacOS/CountYoTokens" -menuProbe <folder>  # opens the real menu per provider
+```
+
+`-menuProbe` opens the real menu for each enabled provider, both on it and switching to it while
+open, and writes `menu-probe.txt`: every section's height against what its content wants, overlaps,
+and whether the main actor kept running. It briefly pops the menu open, so leave the keyboard alone
+while it runs. Add `-enabledProviders '(claude,codex,"opencode-go",zen,devin,droid)'` to any of these
+to cover every provider for that run without changing the saved selection.
+
+```bash
 "/Applications/count yo tokens.app/Contents/MacOS/CountYoTokens" -openSettings menu-bar  # opens a pane
 ```
 

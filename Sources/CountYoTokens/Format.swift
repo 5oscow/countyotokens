@@ -30,7 +30,13 @@ enum Format {
     static func model(_ id: String) -> String {
         if id.hasPrefix("gpt-") { return "GPT-" + id.dropFirst(4) }
         guard id.hasPrefix("claude-") else {
-            return id.split(separator: "-").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
+            // `provider/model` ids keep only the model; brands keep their own capitals.
+            let brands = ["deepseek": "DeepSeek", "glm": "GLM", "minimax": "MiniMax", "qwen": "Qwen", "kimi": "Kimi",
+                          "gemini": "Gemini", "grok": "Grok", "gpt": "GPT", "oss": "OSS"]
+            let name = id.split(separator: "/").last.map(String.init) ?? id
+            return name.split(separator: "-").map { word in
+                brands[word.lowercased()] ?? word.prefix(1).uppercased() + word.dropFirst()
+            }.joined(separator: " ")
         }
         var parts = id.split(separator: "-").map(String.init)
         if parts.first == "claude" { parts.removeFirst() }

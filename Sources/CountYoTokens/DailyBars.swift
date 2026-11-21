@@ -37,6 +37,16 @@ struct DailyBars: View {
                     .allowsHitTesting(false)
                 }
             }
+            // Bars grow up from the bottom even when every day is empty.
+            .frame(width: proxy.size.width, height: height, alignment: .bottomLeading)
+            .overlay {
+                if self.days.allSatisfy({ self.measure($0) <= 0 }) {
+                    Text("Nothing in the last 30 days")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .offset(y: -6)
+                }
+            }
             .contentShape(Rectangle())
             .onContinuousHover { phase in
                 switch phase {

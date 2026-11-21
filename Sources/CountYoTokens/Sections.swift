@@ -133,9 +133,11 @@ struct LimitsSection: View {
             HStack(alignment: .firstTextBaseline) {
                 SectionTitle(text: "Limits")
                 Spacer()
-                Text(prefs.limitFigure == .left ? "left" : "used")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
+                if limits != nil || self.model.limitsIssue == nil {
+                    Text(prefs.limitFigure == .left ? "left" : "used")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
             }
             if limits == nil, let issue = self.model.limitsIssue {
                 Text(self.model.message(for: issue))
@@ -199,26 +201,14 @@ private struct LimitRow: View {
                     .frame(width: 40, alignment: .trailing)
             }
             .monospacedDigit()
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(0.08))
-                    Capsule()
-                        .fill(self.isLow ? AnyShapeStyle(Color.red) : AnyShapeStyle(Theme.accent))
-                        .frame(width: max(3, proxy.size.width * self.shown / 100))
-                    // Pace mark: where the bar would end if usage were spread evenly.
-                    if let pace {
-                        Capsule()
-                            .fill(Color.primary.opacity(0.55))
-                            .frame(width: 1.5, height: 7)
-                            .offset(x: proxy.size.width * self.paceMark(pace) / 100 - 0.75)
-                    }
-                }
-            }
-            .frame(height: 3)
-            .help(pace.map { "Even pace would leave \(Int((100 - $0.expectedUsedPercent).rounded()))% by now" } ?? "")
+            Meter(fraction: self.shown / 100, height: Meter.limitHeight,
+                  fill: self.isLow ? AnyShapeStyle(Color.red) : AnyShapeStyle(Theme.accent),
+                  mark: pace.map { self.paceMark($0) / 100 })
+                .padding(.top, 1)
+                .help(pace.map { "Even pace would leave \(Int((100 - $0.expectedUsedPercent).rounded()))% by now" } ?? "")
             if let pace {
                 PaceLine(pace: pace, now: self.now)
-                    .padding(.top, 3)
+                    .padding(.top, 1)
                     .transition(.opacity)
             }
         }
@@ -264,6 +254,40 @@ private struct PaceLine: View {
         guard let seconds = self.pace.runsOutIn else { return "Lasts until reset" }
         if seconds < 60 { return "Runs out now" }
         return "Runs out in \(Format.countdown(to: self.now.addingTimeInterval(seconds), from: self.now))"
+    }
+}
+
+/// A capsule bar on a faint track. Every bar in the menu is one of these, so they all share one
+/// shape; the optional mark (the pace) stands a little proud of the bar without changing its size.
+struct Meter: View {
+    static let limitHeight: CGFloat = 6
+    static let windowHeight: CGFloat = 4
+
+    let fraction: Double
+    let height: CGFloat
+    let fill: AnyShapeStyle
+    var mark: Double?
+
+    var body: some View {
+        Capsule()
+            .fill(Color.primary.opacity(0.08))
+            .frame(height: self.height)
+            .overlay(alignment: .leading) {
+                GeometryReader { proxy in
+                    let width = proxy.size.width
+                    let clamped = min(1, max(0, self.fraction))
+                    // Never narrower than it is tall, so a sliver still reads as a rounded bar.
+                    Capsule()
+                        .fill(self.fill)
+                        .frame(width: clamped > 0 ? max(self.height, width * clamped) : 0, height: self.height)
+                    if let mark = self.mark {
+                        Capsule()
+                            .fill(Color.primary.opacity(0.6))
+                            .frame(width: 2, height: self.height + 5)
+                            .position(x: min(width - 1, max(1, width * min(1, max(0, mark)))), y: self.height / 2)
+                    }
+                }
+            }
     }
 }
 
@@ -435,15 +459,8 @@ private struct WindowRow: View {
                     .frame(width: 56, alignment: .trailing)
             }
             .monospacedDigit()
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(0.08))
-                    Capsule()
-                        .fill(self.window.isCurrent ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Color.primary.opacity(0.28)))
-                        .frame(width: max(3, proxy.size.width * min(1, self.amount / self.peak)))
-                }
-            }
-            .frame(height: 3)
+            Meter(fraction: self.amount / self.peak, height: Meter.windowHeight,
+                  fill: self.window.isCurrent ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Color.primary.opacity(0.28)))
         }
     }
 }
@@ -457,25 +474,7 @@ struct FooterSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             if self.model.id.hasSpend, self.store.prefs.showsTopModel {
-            HStack(spacing: 4) {
-                Text("Top model")
-                    .foregroundStyle(.secondary)
-                if let top = self.model.snapshot?.topModel {
-                    Text(Format.model(top.model))
-                        .fontWeight(.medium)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Text("· \(Int((top.share * 100).rounded()))% of \(top.byTokens == true ? "tokens" : "spend")")
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .fixedSize()
-                        .contentTransition(.numericText(value: top.share))
-                } else {
-                    Text("—").foregroundStyle(.tertiary)
-                }
-            }
-            .font(.system(size: 12))
-            .monospacedDigit()
+                TopModelLine(top: self.model.snapshot?.topModel)
             }
             TimelineView(.periodic(from: .now, by: 15)) { context in
                 Text(self.status(now: context.date))
@@ -493,5 +492,48 @@ struct FooterSection: View {
         let freshness = self.model.isVisiblyRefreshing ? "Updating…"
             : updated == nil && !self.model.id.hasSpend ? "Not updated yet" : Format.updated(updated, now: now)
         return "\(self.model.id.hasSpend ? self.model.id.spendNote : "Limits from \(self.model.id.displayName)") · \(freshness)"
+    }
+}
+
+/// `Top model  Opus 5.5 · 76% of spend` on one line; when a long model name won't fit, the name
+/// moves to a line of its own rather than being cut off.
+private struct TopModelLine: View {
+    let top: UsageSnapshot.ModelShare?
+
+    var body: some View {
+        Group {
+            if let top = self.top {
+                let name = Text(Format.model(top.model)).fontWeight(.medium)
+                let share = Text("\(Int((top.share * 100).rounded()))% of \(top.byTokens == true ? "tokens" : "spend")")
+                    .foregroundStyle(.secondary)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 4) {
+                        Text("Top model").foregroundStyle(.secondary)
+                        name
+                        Text("·").foregroundStyle(.secondary)
+                        share
+                    }
+                    .lineLimit(1)
+                    .fixedSize()
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: 4) {
+                            Text("Top model").foregroundStyle(.secondary)
+                            Spacer(minLength: 8)
+                            share
+                        }
+                        name
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            } else {
+                HStack(spacing: 4) {
+                    Text("Top model").foregroundStyle(.secondary)
+                    Text("—").foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .font(.system(size: 12))
+        .monospacedDigit()
     }
 }

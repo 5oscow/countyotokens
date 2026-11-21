@@ -740,15 +740,11 @@ private struct LimitSummary: View {
                     .frame(minWidth: 72, alignment: .trailing)
             }
             .monospacedDigit()
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(0.08))
-                    Capsule()
-                        .fill(left < 10 ? AnyShapeStyle(Color.red) : AnyShapeStyle(Theme.accent))
-                        .frame(width: max(4, proxy.size.width * shown / 100))
-                }
-            }
-            .frame(height: 4)
+            // The same bar as the menu's, pace mark included.
+            let pace = hasReset || !prefs.showsPace ? nil : self.limit.pace(now: self.now)
+            Meter(fraction: shown / 100, height: Meter.limitHeight,
+                  fill: left < 10 ? AnyShapeStyle(Color.red) : AnyShapeStyle(Theme.accent),
+                  mark: pace.map { (prefs.limitFigure == .left ? 100 - $0.expectedUsedPercent : $0.expectedUsedPercent) / 100 })
         }
     }
 }
