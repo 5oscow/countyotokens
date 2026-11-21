@@ -794,7 +794,7 @@ private struct DevinCredentials: View {
         @Bindable var store = self.store
         Section {
             SecretField(title: "Token", key: .devinToken, prompt: "Bearer token")
-            TextField("Organization", text: $store.devinOrganization, prompt: Text(DevinLimits.cliOrganization() ?? "org_…"))
+            TextField("Organization", text: $store.devinOrganization, prompt: Text((Demo.isOn ? Demo.devinOrganization : DevinLimits.cliOrganization()) ?? "org_…"))
         } header: {
             Text("Devin sign-in")
         } footer: {

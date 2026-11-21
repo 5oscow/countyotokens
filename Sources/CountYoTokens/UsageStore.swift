@@ -35,6 +35,8 @@ final class ProviderModel: Identifiable {
     @ObservationIgnored let credentials: () -> ProviderCredentials
     /// Set when Settings pins weekly windows to a weekday instead of the plan's reset.
     @ObservationIgnored private var fixedWeekday: Int?
+    /// Showing `Demo` figures: nothing is read, fetched or saved.
+    @ObservationIgnored private var isDemo = false
 
     /// Persisted, so relaunching doesn't hammer an endpoint that asked us to back off.
     @ObservationIgnored private var limitsBlockedUntil: Date {
@@ -87,8 +89,21 @@ final class ProviderModel: Identifiable {
 
     // MARK: Lifecycle
 
+    /// Swaps in made-up figures for screenshots (`-demo`) and stops every refresh.
+    func loadDemo(now: Date = Date()) {
+        self.isDemo = true
+        self.stop()
+        // The demo's own week, not this Mac's: it resets 3 days 5 hours from now.
+        self.windowSettings = WindowSettings(anchor: now.addingTimeInterval(3 * 86_400 + 5 * 3600))
+        self.snapshot = Demo.snapshot(self.id, now: now, settings: self.windowSettings)
+        self.updatedAt = self.snapshot == nil ? nil : now
+        self.limits = Demo.limits(self.id, now: now, settings: self.windowSettings)
+        self.limitsIssue = nil
+        self.account = Demo.account(self.id)
+    }
+
     func start() {
-        guard self.watcher == nil, let source = self.source else { return }
+        guard !self.isDemo, self.watcher == nil, let source = self.source else { return }
         self.watcher = FileWatcher(paths: source.watchedPaths) { [weak self] in self?.refresh() }
         self.refresh()
     }
@@ -103,7 +118,7 @@ final class ProviderModel: Identifiable {
 
     /// Coalesces bursts: at most one scan runs, and at most one more is queued behind it.
     func refresh() {
-        guard let source = self.source else { return }
+        guard !self.isDemo, let source = self.source else { return }
         guard !self.isScanning else {
             self.needsAnotherScan = true
             return
@@ -152,7 +167,7 @@ final class ProviderModel: Identifiable {
     /// server asked us to back off. Usage endpoints rate-limit eagerly: every 3 minutes in the
     /// background, at most once a minute when the menu opens.
     func refreshLimits(minimumAge: TimeInterval = 170) {
-        guard self.id.hasLimits else { return }
+        guard self.id.hasLimits, !self.isDemo else { return }
         let now = Date()
         guard self.limitsTask == nil, now >= self.limitsBlockedUntil,
               now.timeIntervalSince(self.limitsCheckedAt) >= minimumAge else { return }
@@ -220,7 +235,7 @@ final class ProviderModel: Identifiable {
     }
 
     func reloadAccount() {
-        guard self.id == .claude else { return }
+        guard self.id == .claude, !self.isDemo else { return }
         let account = Account.load()
         if account != self.account { self.account = account }
     }
@@ -314,11 +329,15 @@ final class UsageStore {
         let stored = (defaults.array(forKey: Keys.enabled) as? [String])?.compactMap(ProviderID.init(rawValue:))
         var enabledSet = Set(stored ?? ProviderDetection.detected())
         if enabledSet.isEmpty { enabledSet = [.claude] }
+        if Demo.isOn {
+            enabledSet = Set(ProviderID.allCases)
+            for model in models.values { model.loadDemo() }
+        }
         self.enabledSet = enabledSet
         let first = self.prefs.order.first(where: enabledSet.contains) ?? .claude
         let selected = defaults.string(forKey: Keys.selected).flatMap(ProviderID.init(rawValue:)) ?? first
         self.selected = enabledSet.contains(selected) ? selected : first
-        self.devinOrganization = defaults.string(forKey: Keys.devinOrganization) ?? ""
+        self.devinOrganization = Demo.isOn ? "" : defaults.string(forKey: Keys.devinOrganization) ?? ""
 
         for id in self.enabled { self.providers[id]?.start() }
         // Day and window rollovers happen without any file changing.
@@ -449,7 +468,7 @@ extension ProviderModel {
         }
     }
 
-    /// `m•••@gmail.com`.
+    /// `j•••@example.com`.
     static func masked(_ email: String) -> String {
         guard let at = email.firstIndex(of: "@"), at > email.startIndex else { return "Email hidden" }
         return "\(email[email.startIndex])•••\(email[at...])"

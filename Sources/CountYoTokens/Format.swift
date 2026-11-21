@@ -26,21 +26,25 @@ enum Format {
         return "\(value)"
     }
 
-    /// `claude-opus-5-5` → `Opus 5.5`; `gpt-5.5` → `GPT-5.5`; `deepseek-v4.1-flash` → `Deepseek V4.1 Flash`.
+    /// `claude-opus-5-5` → `Opus 5.5`; `gpt-5.5-codex` → `GPT-5.5 Codex`; `deepseek-v4.1-flash` → `DeepSeek V4.1 Flash`.
     static func model(_ id: String) -> String {
-        if id.hasPrefix("gpt-") { return "GPT-" + id.dropFirst(4) }
-        guard id.hasPrefix("claude-") else {
-            // `provider/model` ids keep only the model; brands keep their own capitals.
-            let brands = ["deepseek": "DeepSeek", "glm": "GLM", "minimax": "MiniMax", "qwen": "Qwen", "kimi": "Kimi",
-                          "gemini": "Gemini", "grok": "Grok", "gpt": "GPT", "oss": "OSS"]
-            let name = id.split(separator: "/").last.map(String.init) ?? id
-            return name.split(separator: "-").map { word in
-                brands[word.lowercased()] ?? word.prefix(1).uppercased() + word.dropFirst()
-            }.joined(separator: " ")
+        // `provider/model` ids keep only the model; brands keep their own capitals.
+        let brands = ["deepseek": "DeepSeek", "glm": "GLM", "minimax": "MiniMax", "qwen": "Qwen", "kimi": "Kimi",
+                      "gemini": "Gemini", "grok": "Grok", "gpt": "GPT", "oss": "OSS"]
+        func words(_ parts: some Sequence<Substring>) -> [String] {
+            parts.map { brands[$0.lowercased()] ?? $0.prefix(1).uppercased() + $0.dropFirst() }
         }
-        var parts = id.split(separator: "-").map(String.init)
+        let name = id.split(separator: "/").last.map(String.init) ?? id
+        if name.lowercased().hasPrefix("gpt-") {
+            // `GPT-5.5` stays hyphenated; anything after it is words.
+            let parts = name.split(separator: "-").dropFirst()
+            guard let version = parts.first else { return "GPT" }
+            return (["GPT-" + words([version])[0]] + words(parts.dropFirst())).joined(separator: " ")
+        }
+        guard name.hasPrefix("claude-") else { return words(name.split(separator: "-")).joined(separator: " ") }
+        var parts = name.split(separator: "-").map(String.init)
         if parts.first == "claude" { parts.removeFirst() }
-        guard let family = parts.first else { return id }
+        guard let family = parts.first else { return name }
         let version = parts.dropFirst().prefix { $0.allSatisfy(\.isNumber) && $0.count < 3 }
         return ([family.capitalized] + (version.isEmpty ? [] : [version.joined(separator: ".")])).joined(separator: " ")
     }

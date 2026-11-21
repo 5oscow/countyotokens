@@ -37,7 +37,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         self.statusItem.button?.toolTip = "count yo tokens"
         self.statusItem.menu = self.makeMenu()
         NSApp.mainMenu = self.makeMainMenu()
-        NSApp.applicationIconImage = AppIcon.image
         Notifier.shared.start()
         self.observeLayout()
         self.observeStatusTitle()
@@ -420,33 +419,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 }
 
-/// The app's own icon, drawn in code: the tally on the accent tile. Shown in the Dock while Settings
-/// is open, and in About.
-enum AppIcon {
-    @MainActor static let image: NSImage = {
-        let renderer = ImageRenderer(content: AppIconView(size: 256))
-        renderer.scale = 2
-        return renderer.nsImage ?? NSImage()
-    }()
-}
-
+/// The app's icon (Assets/AppIcon.icns in the bundle), as About shows it.
 struct AppIconView: View {
     let size: CGFloat
 
     var body: some View {
-        RoundedRectangle(cornerRadius: self.size * 0.225, style: .continuous)
-            .fill(Theme.accent.gradient)
-            .frame(width: self.size * 0.8, height: self.size * 0.8)
-            .overlay {
-                Image(nsImage: StatusIcon.image)
-                    .renderingMode(.template)
-                    .resizable()
-                    .frame(width: self.size * 0.5, height: self.size * 0.5)
-                    .foregroundStyle(.white)
-            }
-            .shadow(color: .black.opacity(0.18), radius: self.size * 0.02, y: self.size * 0.01)
+        Image(nsImage: NSApp.applicationIconImage)
+            .resizable()
+            .interpolation(.high)
             .frame(width: self.size, height: self.size)
-            .environment(\.colorScheme, .light)
     }
 }
 
@@ -454,7 +435,6 @@ struct AppIconView: View {
 /// it lands while the menu is open whatever else the main queue is doing.
 enum MainLoop {
     static func soon(_ work: @escaping @MainActor () -> Void) {
-        nonisolated(unsafe) let work = work
         CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
             MainActor.assumeIsolated { work() }
         }
