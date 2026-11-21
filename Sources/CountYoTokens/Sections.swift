@@ -261,7 +261,6 @@ private struct PaceLine: View {
 /// shape; the optional mark (the pace) stands a little proud of the bar without changing its size.
 struct Meter: View {
     static let limitHeight: CGFloat = 6
-    static let windowHeight: CGFloat = 4
 
     let fraction: Double
     let height: CGFloat
@@ -396,7 +395,6 @@ struct WindowsSection: View {
     var body: some View {
         let snapshot = self.model.shown
         let tokensOnly = snapshot.measuresTokens
-        let peak = max(snapshot.windows.map { tokensOnly ? Double($0.tokens) : $0.cost }.max() ?? 0, 0.01)
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 SectionTitle(text: "Weekly windows")
@@ -413,9 +411,9 @@ struct WindowsSection: View {
                     .help("Resets \(end.formatted(.dateTime.weekday(.wide).day().month().hour().minute()))")
                 }
             }
-            VStack(spacing: 8) {
+            VStack(spacing: 6) {
                 ForEach(snapshot.windows) { window in
-                    WindowRow(window: window, peak: peak, tokensOnly: tokensOnly)
+                    WindowRow(window: window, tokensOnly: tokensOnly)
                 }
             }
         }
@@ -426,42 +424,37 @@ struct WindowsSection: View {
 
 private struct WindowRow: View {
     let window: UsageSnapshot.Window
-    let peak: Double
     let tokensOnly: Bool
 
     private var amount: Double { self.tokensOnly ? Double(self.window.tokens) : self.window.cost }
 
     var body: some View {
-        VStack(spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(Format.range(self.window.start, self.window.end))
-                    .font(.system(size: 12.5, weight: self.window.isCurrent ? .semibold : .regular))
-                    .foregroundStyle(self.window.isCurrent ? .primary : .secondary)
-                if self.window.isCurrent {
-                    Circle()
-                        .fill(Theme.accent)
-                        .frame(width: 5, height: 5)
-                        .alignmentGuide(.firstTextBaseline) { $0[.bottom] + 1 }
-                        .help("Current window")
-                }
-                Spacer(minLength: 8)
-                if !self.tokensOnly {
-                    Text(Format.tokens(self.window.tokens))
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.secondary)
-                        .contentTransition(.numericText(value: Double(self.window.tokens)))
-                        .frame(width: 46, alignment: .trailing)
-                }
-                Text(self.tokensOnly ? Format.tokens(self.window.tokens) : Format.wholeMoney(self.window.cost))
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(self.window.isCurrent ? .primary : .secondary)
-                    .contentTransition(.numericText(value: self.amount))
-                    .frame(width: 56, alignment: .trailing)
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(Format.range(self.window.start, self.window.end))
+                .font(.system(size: 12.5, weight: self.window.isCurrent ? .semibold : .regular))
+                .foregroundStyle(self.window.isCurrent ? .primary : .secondary)
+            if self.window.isCurrent {
+                Circle()
+                    .fill(Theme.accent)
+                    .frame(width: 5, height: 5)
+                    .alignmentGuide(.firstTextBaseline) { $0[.bottom] + 1 }
+                    .help("Current window")
             }
-            .monospacedDigit()
-            Meter(fraction: self.amount / self.peak, height: Meter.windowHeight,
-                  fill: self.window.isCurrent ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Color.primary.opacity(0.28)))
+            Spacer(minLength: 8)
+            if !self.tokensOnly {
+                Text(Format.tokens(self.window.tokens))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .contentTransition(.numericText(value: Double(self.window.tokens)))
+                    .frame(width: 46, alignment: .trailing)
+            }
+            Text(self.tokensOnly ? Format.tokens(self.window.tokens) : Format.wholeMoney(self.window.cost))
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(self.window.isCurrent ? .primary : .secondary)
+                .contentTransition(.numericText(value: self.amount))
+                .frame(width: 56, alignment: .trailing)
         }
+        .monospacedDigit()
     }
 }
 

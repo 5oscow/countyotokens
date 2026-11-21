@@ -69,11 +69,11 @@
 
 ## Install
 
-1. Download `count-yo-tokens-<version>.zip` from the
-   [latest release](https://github.com/5oscow/countyotokens/releases/latest) and unzip it.
+1. Download `count-yo-tokens-<version>.dmg` from the
+   [latest release](https://github.com/5oscow/countyotokens/releases/latest) and open it.
    The app runs natively on Apple silicon and Intel.
-2. Move **count yo tokens.app** to **Applications**.
-3. Open it. The build is ad-hoc signed, not notarized, so macOS will block the first launch.
+2. Drag **count yo tokens** onto **Applications** in the window that opens, then eject the disk.
+3. Open the app. The build is ad-hoc signed, not notarized, so macOS will block the first launch.
    To allow it, either:
    - open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**, or
    - remove the quarantine flag in Terminal:
@@ -172,7 +172,7 @@ git clone https://github.com/5oscow/countyotokens.git
 cd countyotokens
 ./Scripts/build_app.sh             # builds dist/count yo tokens.app
 ./Scripts/build_app.sh --install   # copies it to /Applications and launches it
-./Scripts/build_app.sh --zip       # universal build, zipped for a release
+./Scripts/build_app.sh --dmg       # universal build in a disk image, for a release (needs uv)
 ```
 
 The project has three targets:
@@ -198,7 +198,9 @@ These flags are for development, not everyday use:
 | `CountYoTokens -menuProbe <folder>` | Opens the real menu for each provider. It checks every section's height, looks for overlaps, and confirms the app stays responsive. It briefly takes the screen, so leave the keyboard alone. |
 | `-enabledProviders '(claude,codex,"opencode-go",zen,devin,droid)'` | Added to any of these, covers every provider for that run without changing your settings. |
 
-`Scripts/make_icon.sh` redraws the app icon from code (`Scripts/make_icon.swift`).
+`Scripts/make_icon.sh` redraws the app icon from code (`Scripts/make_icon.swift`), and
+`Scripts/make_dmg_background.swift` draws the disk image's window. `--dmg` lays that window out
+with [dmgbuild](https://github.com/dmgbuild/dmgbuild), run through `uvx`.
 
 ## How refresh stays instant
 

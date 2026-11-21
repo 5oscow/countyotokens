@@ -1,16 +1,17 @@
 #!/bin/zsh
 # Builds "count yo tokens.app" into dist/.
 #   --install  replace the copy in /Applications and relaunch it
-#   --zip      build for Apple silicon and Intel, and zip the app for a GitHub release
+#   --dmg      build for Apple silicon and Intel, and make the release disk image (needs uv)
+#   --zip      build for Apple silicon and Intel, and zip the app
 set -euo pipefail
 cd "${0:A:h}/.."
 
 APP_NAME="count yo tokens"
 BUNDLE_ID="com.sirrayi.countyotokens"
-VERSION="1.0.0"
+VERSION="1.0.1"
 APP="dist/${APP_NAME}.app"
 
-if [[ "${1:-}" == "--zip" ]]; then
+if [[ "${1:-}" == "--zip" || "${1:-}" == "--dmg" ]]; then
     ARCHS=(--arch arm64 --arch x86_64)
     swift build -c release --product CountYoTokens $ARCHS
     BINARY="$(swift build -c release --product CountYoTokens $ARCHS --show-bin-path)/CountYoTokens"
@@ -51,6 +52,19 @@ if [[ "${1:-}" == "--zip" ]]; then
     ZIP="dist/count-yo-tokens-${VERSION}.zip"
     ditto -c -k --keepParent "$APP" "$ZIP"
     echo "Zipped $ZIP ($(du -sh "$ZIP" | cut -f1)), $(lipo -archs "$APP/Contents/MacOS/CountYoTokens")"
+fi
+
+if [[ "${1:-}" == "--dmg" ]]; then
+    DMG="dist/count-yo-tokens-${VERSION}.dmg"
+    art=$(mktemp -d)
+    trap 'rm -rf "${art:?}"' EXIT
+    swift Scripts/make_dmg_background.swift "$art/background.png" 1
+    swift Scripts/make_dmg_background.swift "$art/background@2x.png" 2
+    rm -f "$DMG"
+    uvx --from dmgbuild==1.6.7 dmgbuild -s Scripts/dmg_settings.py \
+        -D app="$PWD/$APP" -D icon="$PWD/Assets/AppIcon.icns" -D background="$art/background.png" \
+        "$APP_NAME" "$DMG" >/dev/null
+    echo "Made $DMG ($(du -sh "$DMG" | cut -f1)), $(lipo -archs "$APP/Contents/MacOS/CountYoTokens")"
 fi
 
 if [[ "${1:-}" == "--install" ]]; then
