@@ -45,7 +45,7 @@ public enum ProviderID: String, CaseIterable, Codable, Sendable, Identifiable {
         }
     }
 
-    /// Settings needs a pasted credential for these.
+    /// Settings can take a pasted credential for these when the CLI isn't signed in.
     public var needsPastedKey: Bool { self == .devin || self == .droid }
 }
 
@@ -84,7 +84,7 @@ public enum ProviderDetection {
         var found: [ProviderID] = [.claude]
         if CodexScanner.hasSessions(environment: environment) { found.append(.codex) }
         if fm.fileExists(atPath: OpenCodeDB.url(environment: environment).path) { found += [.opencodeGo, .zen] }
-        if exists(".config/devin") || fm.fileExists(atPath: "/Applications/Devin.app") { found.append(.devin) }
+        if exists(".config/devin") || exists(".local/share/devin") || fm.fileExists(atPath: "/Applications/Devin.app") { found.append(.devin) }
         if exists(".factory") || environment["FACTORY_API_KEY"] != nil { found.append(.droid) }
         return found
     }

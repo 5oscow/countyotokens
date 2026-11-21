@@ -552,7 +552,7 @@ struct ProviderStatus {
         }
         if let issue = model.limitsIssue {
             let text = issue == .needsKey
-                ? (model.id == .devin ? "Needs a session token" : "Needs an API key")
+                ? (model.id == .devin ? "Needs a Devin CLI sign-in" : "Needs an API key")
                 : model.message(for: issue)
             self = .init(level: .attention, text: text)
         } else if let limits = model.limits, limits.fetchedAt > .distantPast {
@@ -796,12 +796,12 @@ private struct DevinCredentials: View {
     var body: some View {
         @Bindable var store = self.store
         Section {
-            SecretField(title: "Token", key: .devinToken, prompt: "Bearer token")
+            SecretField(title: "Token", key: .devinToken, prompt: DevinLimits.cliToken() == nil ? "Bearer token" : "Using the Devin CLI sign-in")
             TextField("Organization", text: $store.devinOrganization, prompt: Text((Demo.isOn ? Demo.devinOrganization : DevinLimits.cliOrganization()) ?? "org_…"))
         } header: {
             Text("Devin sign-in")
         } footer: {
-            Footnote("In app.devin.ai, open Usage & Limits with the browser's developer tools on the Network tab. Copy the Authorization header from the billing/quota/usage request. The organization defaults to the one the Devin CLI uses. The token is kept in your Keychain and only ever sent to app.devin.ai.")
+            Footnote("Read from the Devin CLI's own sign-in, so nothing to paste once devin auth login has run. A token pasted here is tried first; the organization defaults to the CLI's. Kept in your Keychain and only ever sent to app.devin.ai.")
         }
     }
 }

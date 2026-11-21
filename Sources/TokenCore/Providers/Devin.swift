@@ -1,15 +1,33 @@
 import Foundation
 
-/// Devin's daily and weekly quota from app.devin.ai, with a session token pasted into Settings.
-/// The organization comes from Settings or the Devin CLI's own config.
+/// Devin's daily and weekly quota from app.devin.ai. The token is the Devin CLI's own sign-in
+/// (`~/.local/share/devin/credentials.toml`) unless one is pasted into Settings; the organization
+/// comes from Settings or the CLI's config. No browser or Keychain access needed.
 public enum DevinLimits {
     public static func fetch(token rawToken: String?, organization rawOrganization: String?) async throws(LimitsError) -> PlanLimits {
         let environment = ProcessInfo.processInfo.environment
-        guard let token = self.normalizeToken(environment["DEVIN_BEARER_TOKEN"] ?? environment["DEVIN_AUTHORIZATION"] ?? rawToken)
-        else { throw .needsKey }
-        guard let organization = self.normalizeOrganization(environment["DEVIN_ORGANIZATION"] ?? rawOrganization)
+        // An explicit token first, then the CLI's: a stale pasted token falls through to a live sign-in.
+        var tokens: [String] = []
+        for raw in [environment["DEVIN_BEARER_TOKEN"] ?? environment["DEVIN_AUTHORIZATION"], rawToken, self.cliToken()] {
+            if let token = self.normalizeToken(raw), !tokens.contains(token) { tokens.append(token) }
+        }
+        guard !tokens.isEmpty,
+              let organization = self.normalizeOrganization(environment["DEVIN_ORGANIZATION"] ?? rawOrganization ?? self.cliOrganization())
         else { throw .needsKey }
 
+        var lastError = LimitsError.failed
+        for token in tokens {
+            do throws(LimitsError) {
+                return try await self.fetch(token: token, organization: organization)
+            } catch {
+                lastError = error
+                guard error == .expired else { throw error }
+            }
+        }
+        throw lastError
+    }
+
+    private static func fetch(token: String, organization: Organization) async throws(LimitsError) -> PlanLimits {
         var headers = [
             "Authorization": "Bearer \(token)",
             "Accept-Language": "en-US,en;q=0.9",
@@ -85,6 +103,18 @@ public enum DevinLimits {
             return Organization(internalID: value, paths: [value, "organizations/\(value)"])
         }
         return Organization(internalID: nil, paths: ["org/\(value)", value])
+    }
+
+    /// The session token the Devin CLI signed in with (`devin auth login`).
+    public static func cliToken() -> String? {
+        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/share/devin/credentials.toml")
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        for line in text.split(whereSeparator: \.isNewline) {
+            let parts = line.split(separator: "=", maxSplits: 1)
+            guard parts.count == 2, parts[0].trimmingCharacters(in: .whitespaces) == "windsurf_api_key" else { continue }
+            return JSONValue.string(parts[1].trimmingCharacters(in: CharacterSet(charactersIn: "\"' ")))
+        }
+        return nil
     }
 
     /// The organization the Devin CLI was set up with (`~/.config/devin/config.json`).

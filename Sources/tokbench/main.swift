@@ -30,7 +30,7 @@ if command == "limits" || command == "spend" {
             print("\(id.rawValue) spend in \(started.duration(to: .now)): 30d $\(String(format: "%.2f", snapshot.historyCost)) · \(snapshot.historyTokens) tokens · today \(snapshot.today?.tokens ?? 0) · top \(snapshot.topModel?.model ?? "-")")
             continue
         }
-        let credentials = ProviderCredentials(devinToken: nil, devinOrganization: DevinLimits.cliOrganization(), droidAPIKey: DroidLimits.environmentKey())
+        let credentials = ProviderCredentials(devinToken: nil, devinOrganization: nil, droidAPIKey: DroidLimits.environmentKey())
         do {
             let limits = try await ProviderLimits.fetch(id, credentials: credentials)
             print("\(id.rawValue) limits in \(started.duration(to: .now)) plan=\(limits.plan ?? "-")")
