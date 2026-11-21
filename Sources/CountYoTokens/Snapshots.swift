@@ -48,9 +48,14 @@ enum Snapshots {
         window.contentView = host
         host.layoutSubtreeIfNeeded()
         host.displayIfNeeded()
+        // Retina, so the PNGs show what a real screen does.
         guard host.bounds.width > 0, host.bounds.height > 0,
-              let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds)
+              let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(host.bounds.width * 2),
+                                            pixelsHigh: Int(host.bounds.height * 2), bitsPerSample: 8,
+                                            samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
         else { return }
+        bitmap.size = host.bounds.size
         host.cacheDisplay(in: host.bounds, to: bitmap)
         try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
     }

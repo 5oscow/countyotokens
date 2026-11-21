@@ -256,16 +256,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             button.attributedTitle = NSAttributedString(string: title, attributes: attributes)
         }
 
-        // The meter shows the first two limits left; without limits it falls back to the tally.
-        let now = Date()
-        let lefts = (model.limits?.items.prefix(2) ?? []).map { limit in
-            limit.resetsAt.map { $0 <= now } == true ? 100 : limit.leftPercent
-        }
-        let key = prefs.iconStyle == .meter && !lefts.isEmpty
-            ? "meter|" + lefts.map { String(Int($0.rounded())) }.joined(separator: ",") : "tally"
-        guard key != self.iconKey else { return }
-        self.iconKey = key
-        button.image = key == "tally" ? StatusIcon.image : StatusIcon.meter(lefts)
+        let icon = StatusIcon.current(prefs.iconStyle, model: model)
+        guard icon.key != self.iconKey else { return }
+        self.iconKey = icon.key
+        button.image = icon.image()
     }
 }
 
@@ -301,6 +295,24 @@ struct AppIconView: View {
 
 /// Tally marks — four strokes and a slash. Template image, so it tints like every system extra.
 enum StatusIcon {
+    /// The icon for a style, with a key that changes only when the drawing would. The meter shows
+    /// the first two limits left and falls back to the tally for providers without limits.
+    @MainActor
+    static func current(_ style: IconStyle, model: ProviderModel, now: Date = Date()) -> (key: String, image: () -> NSImage) {
+        switch style {
+        case .tally:
+            return ("tally", { self.image })
+        case .logo:
+            return ("logo|\(model.id.rawValue)", { ProviderLogos.statusImage(model.id) })
+        case .meter:
+            let lefts = (model.limits?.items.prefix(2) ?? []).map { limit in
+                limit.resetsAt.map { $0 <= now } == true ? 100 : limit.leftPercent
+            }
+            guard !lefts.isEmpty else { return ("tally", { self.image }) }
+            return ("meter|" + lefts.map { String(Int($0.rounded())) }.joined(separator: ","), { self.meter(lefts) })
+        }
+    }
+
     static let image: NSImage = {
         let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
             NSColor.black.setStroke()

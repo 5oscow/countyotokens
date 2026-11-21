@@ -174,9 +174,15 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
 }
 
 enum IconStyle: String, CaseIterable, Identifiable {
-    case tally, meter
+    case tally, meter, logo
     var id: String { self.rawValue }
-    var title: String { self == .tally ? "Tally marks" : "Limit meter" }
+    var title: String {
+        switch self {
+        case .tally: "Tally marks"
+        case .meter: "Limit meter"
+        case .logo: "Provider logo"
+        }
+    }
 }
 
 enum LimitFigure: String, CaseIterable, Identifiable {

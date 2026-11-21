@@ -8,7 +8,8 @@ No upstream remote, no auto-updates.
 
 ## Providers
 
-One tally icon; a switcher at the top of the menu picks the provider.
+One tally icon; a switcher of provider logos at the top of the menu picks the provider. The logos
+are CodexBar's vector marks, embedded as SVG in `LogoData.swift`.
 
 | Provider | Spend | Limits |
 |---|---|---|
@@ -42,8 +43,8 @@ Menu → **Settings…** (⌘,) opens a sidebar window, brought to the front on 
 - **General**: open at login; how often plan limits are checked (2–15 minutes, or only on request)
   and whether opening the menu checks too; refresh everything now; which day weekly windows start
   (each plan's weekly reset, or a fixed weekday).
-- **Menu Bar**: a live preview; the icon (tally marks, or a meter that fills with the first two
-  limits left); what sits next to it (nothing, today's spend, this window's spend, or the lowest
+- **Menu Bar**: a live preview; the icon (tally marks, a meter that fills with the first two
+  limits left, or the provider's logo); what sits next to it (nothing, today's spend, this window's spend, or the lowest
   limit left) and which provider it follows; turning it red under 10% left.
 - **Menu**: show or hide each section (limits, pace, today and this window, last 30 days, weekly
   windows, top model); limits as percent left or used; resets as time remaining or date and time;

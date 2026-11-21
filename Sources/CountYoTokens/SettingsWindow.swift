@@ -28,13 +28,14 @@ enum SettingsPane: Hashable {
         }
     }
 
-    var symbol: String {
+    /// Providers wear their own logo instead.
+    var symbol: String? {
         switch self {
         case .general: "gearshape.fill"
         case .menuBar: "menubar.rectangle"
         case .menu: "list.bullet.rectangle.fill"
         case .notifications: "bell.badge.fill"
-        case let .provider(id): id.symbol
+        case .provider: nil
         case .advanced: "wrench.and.screwdriver.fill"
         case .about: "info"
         }
@@ -153,7 +154,8 @@ private struct ProviderSidebarRow: View {
     }
 }
 
-/// White symbol on a coloured rounded square, the way System Settings marks its panes.
+/// White symbol on a coloured rounded square, the way System Settings marks its panes. Providers
+/// get their own logo on their brand colour.
 struct PaneIcon: View {
     let pane: SettingsPane
     let size: CGFloat
@@ -163,9 +165,18 @@ struct PaneIcon: View {
             .fill(self.pane.tint.gradient)
             .frame(width: self.size, height: self.size)
             .overlay {
-                Image(systemName: self.pane.symbol)
-                    .font(.system(size: self.size * 0.52, weight: .semibold))
-                    .foregroundStyle(.white)
+                if case let .provider(id) = self.pane {
+                    ProviderLogo(id: id, size: self.size * 0.58)
+                } else if let symbol = self.pane.symbol {
+                    Image(systemName: symbol)
+                        .font(.system(size: self.size * 0.52, weight: .semibold))
+                }
+            }
+            .foregroundStyle(.white)
+            .overlay {
+                // Keeps the near-black tiles from melting into a dark sidebar.
+                RoundedRectangle(cornerRadius: self.size * 0.26, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5)
             }
     }
 }
@@ -262,7 +273,11 @@ private struct MenuBarPane: View {
                         Label {
                             Text(style.title)
                         } icon: {
-                            Image(nsImage: style == .tally ? StatusIcon.image : StatusIcon.meter([72, 40]))
+                            switch style {
+                            case .tally: Image(nsImage: StatusIcon.image)
+                            case .meter: Image(nsImage: StatusIcon.meter([72, 40]))
+                            case .logo: Image(nsImage: ProviderLogos.statusImage(self.store.menuBarModel.id))
+                            }
                         }
                         .tag(style)
                     }
@@ -272,7 +287,7 @@ private struct MenuBarPane: View {
             } header: {
                 Text("Icon")
             } footer: {
-                Footnote("The meter fills like a battery with the first two limits left: the session on top, the week below. Providers without limits keep the tally.")
+                Footnote("The meter fills like a battery with the first two limits left: the session on top, the week below. Providers without limits keep the tally. The logo follows the provider the text is for.")
             }
             Section {
                 Picker("Show next to the icon", selection: $prefs.menuBarDisplay) {
@@ -281,7 +296,14 @@ private struct MenuBarPane: View {
                 Picker("For", selection: $prefs.menuBarProvider) {
                     Text("The provider shown in the menu").tag(ProviderID?.none)
                     Divider()
-                    ForEach(self.store.enabled) { Text($0.displayName).tag(ProviderID?.some($0)) }
+                    ForEach(self.store.enabled) { id in
+                        Label {
+                            Text(id.displayName)
+                        } icon: {
+                            Image(nsImage: ProviderLogos.statusImage(id))
+                        }
+                        .tag(ProviderID?.some(id))
+                    }
                 }
                 Toggle(isOn: $prefs.warnsInMenuBar) {
                     Text("Turn red when a limit is nearly used up")
@@ -305,14 +327,11 @@ private struct MenuBarPreview: View {
     var body: some View {
         let prefs = self.store.prefs
         let model = self.store.menuBarModel
-        let now = Date()
-        let lefts = (model.limits?.items.prefix(2) ?? []).map { $0.resetsAt.map { $0 <= now } == true ? 100 : $0.leftPercent }
-        let meter = prefs.iconStyle == .meter && !lefts.isEmpty
         HStack(spacing: 14) {
             Image(systemName: "wifi")
             Image(systemName: "battery.75percent")
             HStack(spacing: 3) {
-                Image(nsImage: meter ? StatusIcon.meter(lefts) : StatusIcon.image)
+                Image(nsImage: StatusIcon.current(prefs.iconStyle, model: model).image())
                     .renderingMode(.template)
                 if let text = self.text(model, prefs: prefs), !text.isEmpty {
                     Text(text)
@@ -956,28 +975,6 @@ private struct Footnote: View {
 }
 
 extension ProviderID {
-    var symbol: String {
-        switch self {
-        case .claude: "asterisk"
-        case .codex: "terminal.fill"
-        case .opencodeGo: "bolt.fill"
-        case .zen: "leaf.fill"
-        case .devin: "wand.and.stars"
-        case .droid: "gearshape.2.fill"
-        }
-    }
-
-    var tint: Color {
-        switch self {
-        case .claude: Color(red: 0.85, green: 0.47, blue: 0.34)
-        case .codex: Color(white: 0.3)
-        case .opencodeGo: .blue
-        case .zen: .green
-        case .devin: .teal
-        case .droid: .orange
-        }
-    }
-
     var usageURL: URL {
         switch self {
         case .claude: URL(string: "https://claude.ai/settings/usage")!

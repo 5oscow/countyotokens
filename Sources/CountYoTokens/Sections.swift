@@ -50,23 +50,31 @@ struct SwitcherSection: View {
                     withAnimation(.smooth(duration: 0.3)) { self.store.selected = id }
                     self.store.current.refreshLimits(minimumAge: 60)
                 } label: {
-                    Text(id.shortName)
-                        .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
-                        .foregroundStyle(isSelected ? .primary : .secondary)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 24)
-                        .background {
-                            if isSelected {
-                                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .fill(Color.primary.opacity(0.1))
-                                    .matchedGeometryEffect(id: "tab", in: self.selection)
-                            } else if self.hovered == id {
-                                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .fill(Color.primary.opacity(0.05))
-                            }
+                    HStack(spacing: 4) {
+                        ProviderLogo(id: id, size: 15)
+                            .foregroundStyle(isSelected ? AnyShapeStyle(id.markColor ?? .primary) : AnyShapeStyle(.secondary))
+                        // Go and Zen share OpenCode's mark: a word tells them apart when both are here.
+                        if id.sharesMark, self.store.enabled.contains(where: { $0 != id && $0.sharesMark }) {
+                            Text(id.shortName)
+                                .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
+                                .foregroundStyle(isSelected ? .primary : .secondary)
+                                .lineLimit(1)
+                                .fixedSize()
                         }
-                        .contentShape(Rectangle())
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 26)
+                    .background {
+                        if isSelected {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(Color.primary.opacity(0.1))
+                                .matchedGeometryEffect(id: "tab", in: self.selection)
+                        } else if self.hovered == id {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(Color.primary.opacity(0.05))
+                        }
+                    }
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .onHover { inside in self.hovered = inside ? id : (self.hovered == id ? nil : self.hovered) }
@@ -88,9 +96,13 @@ struct HeaderSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(alignment: .firstTextBaseline) {
-                Text(self.model.id.displayName)
-                    .font(.system(size: 13, weight: .bold))
-                    .contentTransition(.opacity)
+                HStack(spacing: 5) {
+                    ProviderLogo(id: self.model.id, size: 13)
+                        .foregroundStyle(self.model.id.markColor ?? .primary)
+                    Text(self.model.id.displayName)
+                        .font(.system(size: 13, weight: .bold))
+                }
+                .contentTransition(.opacity)
                 Spacer(minLength: 8)
                 if let plan = self.model.plan {
                     Text(plan)
