@@ -166,9 +166,13 @@ final class ProviderModel: Identifiable {
     /// Fetches limits unless a fetch is running, the last one is younger than `minimumAge`, or the
     /// server asked us to back off. Usage endpoints rate-limit eagerly: every 3 minutes in the
     /// background, at most once a minute when the menu opens.
-    func refreshLimits(minimumAge: TimeInterval = 170) {
+    ///
+    /// `userInitiated` lets a provider recover from an expired sign-in on the way (see ProviderLimits).
+    func refreshLimits(minimumAge: TimeInterval = 170, userInitiated: Bool = false) {
         guard self.id.hasLimits, !self.isDemo else { return }
         let now = Date()
+        // An expired sign-in shouldn't wait out the usual spacing once the user is looking.
+        let minimumAge = userInitiated && self.limitsIssue == .expired ? 0 : minimumAge
         guard self.limitsTask == nil, now >= self.limitsBlockedUntil,
               now.timeIntervalSince(self.limitsCheckedAt) >= minimumAge else { return }
         self.limitsCheckedAt = now
@@ -177,7 +181,7 @@ final class ProviderModel: Identifiable {
         self.limitsTask = Task {
             let result: Result<PlanLimits, LimitsError>
             do throws(LimitsError) {
-                result = .success(try await ProviderLimits.fetch(id, credentials: credentials))
+                result = .success(try await ProviderLimits.fetch(id, credentials: credentials, userInitiated: userInitiated))
             } catch {
                 result = .failure(error)
             }
@@ -365,7 +369,7 @@ final class UsageStore {
 
     func menuWillOpen() {
         self.current.refresh()
-        if self.prefs.refreshesOnOpen { self.current.refreshLimits(minimumAge: 60) }
+        if self.prefs.refreshesOnOpen { self.current.refreshLimits(minimumAge: 60, userInitiated: true) }
         self.current.reloadAccount()
     }
 
@@ -373,7 +377,7 @@ final class UsageStore {
     func refreshAll() {
         for id in self.enabled {
             self.providers[id]?.refresh()
-            self.providers[id]?.refreshLimits(minimumAge: 30)
+            self.providers[id]?.refreshLimits(minimumAge: 30, userInitiated: true)
         }
     }
 
@@ -397,7 +401,7 @@ final class UsageStore {
 
     func refreshNow() {
         self.current.refresh()
-        self.current.refreshLimits(minimumAge: 30)
+        self.current.refreshLimits(minimumAge: 30, userInitiated: true)
     }
 
     func isEnabled(_ id: ProviderID) -> Bool { self.enabledSet.contains(id) }

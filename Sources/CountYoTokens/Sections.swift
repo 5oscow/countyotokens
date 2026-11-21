@@ -48,7 +48,7 @@ struct SwitcherSection: View {
                 Button {
                     guard !isSelected else { return }
                     withAnimation(.smooth(duration: 0.3)) { self.store.selected = id }
-                    self.store.current.refreshLimits(minimumAge: 60)
+                    self.store.current.refreshLimits(minimumAge: 60, userInitiated: true)
                 } label: {
                     HStack(spacing: 4) {
                         ProviderLogo(id: id, size: 15)

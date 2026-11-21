@@ -8,7 +8,7 @@ cd "${0:A:h}/.."
 
 APP_NAME="count yo tokens"
 BUNDLE_ID="com.sirrayi.countyotokens"
-VERSION="1.0.1"
+VERSION="1.0.2"
 APP="dist/${APP_NAME}.app"
 
 if [[ "${1:-}" == "--zip" || "${1:-}" == "--dmg" ]]; then

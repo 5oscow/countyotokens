@@ -3,8 +3,16 @@ import TokenCore
 
 // Times the refresh path: a cold scan, then warm rescans. With an interval, warm scans are spaced
 // out so they pick up whatever Claude appended meanwhile (the common case while you work).
-// Usage: tokbench [warm-iterations] [interval-seconds]   |   tokbench limits
+// Usage: tokbench [warm-iterations] [interval-seconds]   |   tokbench limits   |   tokbench renew-claude
 let command = CommandLine.arguments.dropFirst().first
+if command == "renew-claude" {
+    // Runs Claude Code's sign-in renewal once. With a valid sign-in it can't change anything: it
+    // times out after ~10 s and prints false.
+    let started = ContinuousClock.now
+    let renewed = await ClaudeLimits.renewSignIn()
+    print("renewed=\(renewed) in \(started.duration(to: .now))")
+    exit(0)
+}
 if command == "limits" || command == "spend" {
     let ids = CommandLine.arguments.dropFirst(2).compactMap(ProviderID.init(rawValue:))
     for id in ids.isEmpty ? [ProviderID.claude] : ids {

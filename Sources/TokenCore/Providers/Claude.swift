@@ -12,7 +12,23 @@ public enum ClaudeLimits {
         var expiresAt: Date?
     }
 
-    public static func fetch() async throws(LimitsError) -> PlanLimits {
+    /// `mayRenew`: when the sign-in has expired, have Claude Code renew it and try once more. Only for
+    /// fetches the user asked for (opening the menu, refreshing), as CodexBar does.
+    public static func fetch(mayRenew: Bool = false) async throws(LimitsError) -> PlanLimits {
+        do {
+            return try await self.fetchOnce()
+        } catch .expired where mayRenew {
+            guard await ClaudeRenewal.shared.renew() else { throw .expired }
+            return try await self.fetchOnce()
+        }
+    }
+
+    /// Has Claude Code renew its sign-in now (tokbench). True when the Keychain holds a fresh one.
+    public static func renewSignIn() async -> Bool {
+        await ClaudeRenewal.shared.renew()
+    }
+
+    private static func fetchOnce() async throws(LimitsError) -> PlanLimits {
         guard let credentials = self.readCredentials() else { throw .signedOut }
         if let expiry = credentials.expiresAt, expiry < Date() { throw .expired }
         let json = try await HTTP.json(self.endpoint, headers: [
@@ -61,7 +77,7 @@ public enum ClaudeLimits {
         return self.parseCredentials(data)
     }
 
-    private static func keychainItem() -> Data? {
+    static func keychainItem() -> Data? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
         process.arguments = ["find-generic-password", "-s", self.keychainService, "-a", NSUserName(), "-w"]

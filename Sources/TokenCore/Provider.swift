@@ -92,9 +92,11 @@ public enum ProviderDetection {
 
 /// Fetches any provider's limits.
 public enum ProviderLimits {
-    public static func fetch(_ id: ProviderID, credentials: ProviderCredentials) async throws(LimitsError) -> PlanLimits {
+    /// `userInitiated`: the user opened the menu or asked for a refresh, so a provider may do slower
+    /// recovery work (Claude: get Claude Code to renew an expired sign-in).
+    public static func fetch(_ id: ProviderID, credentials: ProviderCredentials, userInitiated: Bool = false) async throws(LimitsError) -> PlanLimits {
         switch id {
-        case .claude: try await ClaudeLimits.fetch()
+        case .claude: try await ClaudeLimits.fetch(mayRenew: userInitiated)
         case .codex: try await CodexLimits.fetch()
         case .opencodeGo: try await OpenCodeGoLimits.fetch()
         case .devin: try await DevinLimits.fetch(token: credentials.devinToken, organization: credentials.devinOrganization)
