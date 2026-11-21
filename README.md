@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/sirrayi/countyotokens/releases/latest"><img alt="Download" src="https://img.shields.io/github/v/release/sirrayi/countyotokens?label=download&color=d4673a"></a>
+  <a href="https://github.com/5oscow/countyotokens/releases/latest"><img alt="Download" src="https://img.shields.io/github/v/release/5oscow/countyotokens?label=download&color=d4673a"></a>
   <img alt="macOS 15+" src="https://img.shields.io/badge/macOS-15%2B-black">
   <img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-f05138">
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue"></a>
@@ -70,7 +70,7 @@
 ## Install
 
 1. Download `count-yo-tokens-<version>.zip` from the
-   [latest release](https://github.com/sirrayi/countyotokens/releases/latest) and unzip it.
+   [latest release](https://github.com/5oscow/countyotokens/releases/latest) and unzip it.
    The app runs natively on Apple silicon and Intel.
 2. Move **count yo tokens.app** to **Applications**.
 3. Open it. The build is ad-hoc signed, not notarized, so macOS will block the first launch.
@@ -168,7 +168,7 @@ is refreshed at most once a day.
 Requires macOS 15 and Swift 6 (Xcode 16 or later, or the matching command line tools).
 
 ```bash
-git clone https://github.com/sirrayi/countyotokens.git
+git clone https://github.com/5oscow/countyotokens.git
 cd countyotokens
 ./Scripts/build_app.sh             # builds dist/count yo tokens.app
 ./Scripts/build_app.sh --install   # copies it to /Applications and launches it
