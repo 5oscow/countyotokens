@@ -11,8 +11,9 @@ VERSION="1.0.0"
 APP="dist/${APP_NAME}.app"
 
 if [[ "${1:-}" == "--zip" ]]; then
-    swift build -c release --product CountYoTokens --arch arm64 --arch x86_64
-    BINARY=.build/apple/Products/Release/CountYoTokens
+    ARCHS=(--arch arm64 --arch x86_64)
+    swift build -c release --product CountYoTokens $ARCHS
+    BINARY="$(swift build -c release --product CountYoTokens $ARCHS --show-bin-path)/CountYoTokens"
 else
     swift build -c release --product CountYoTokens
     BINARY=.build/release/CountYoTokens
