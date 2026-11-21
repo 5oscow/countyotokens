@@ -101,6 +101,18 @@ extension ProviderID {
         case .droid: Color(white: 0.06)
         }
     }
+
+    /// Logos are fitted to their ink, so a solid square looks bigger than a starburst at the same
+    /// size. This evens them out on a tile.
+    var opticalScale: CGFloat {
+        switch self {
+        case .claude: 1.04
+        case .codex: 1.0
+        case .opencodeGo, .zen: 0.78
+        case .devin: 0.94
+        case .droid: 1.0
+        }
+    }
 }
 
 /// A provider's mark at any size, in the surrounding foreground style.

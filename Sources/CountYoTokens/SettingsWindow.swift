@@ -37,7 +37,16 @@ enum SettingsPane: Hashable {
         case .notifications: "bell.badge.fill"
         case .provider: nil
         case .advanced: "wrench.and.screwdriver.fill"
-        case .about: "info"
+        case .about: "info.circle.fill"
+        }
+    }
+
+    /// How much of the tile a symbol's longer side spans, so wide and tall symbols look one size.
+    var symbolScale: CGFloat {
+        switch self {
+        case .menuBar, .menu: 0.66
+        case .about: 0.62
+        default: 0.58
         }
     }
 
@@ -60,17 +69,32 @@ enum SettingsWindow {
     static func make(store: UsageStore) -> NSWindow {
         let controller = NSHostingController(rootView: SettingsView().environment(store))
         controller.sizingOptions = []
-        controller.sceneBridgingOptions = [.toolbars, .title]
+        // No toolbar: its strip ran 2 pt past the sidebar's edge, put the title 21 pt left of the
+        // content, and hides anything drawn beneath it. The pane draws its own title in the title bar.
+        controller.sceneBridgingOptions = []
         let window = NSWindow(contentViewController: controller)
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
-        window.toolbar = NSToolbar(identifier: "Settings")
-        window.toolbarStyle = .unified
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
         window.isReleasedWhenClosed = false
         window.contentMinSize = NSSize(width: 720, height: 500)
         window.setContentSize(NSSize(width: 800, height: 580))
-        window.center()
-        window.setFrameAutosaveName("Settings")
         return window
+    }
+
+    /// The title bar's height, which the pane title shares with the window buttons.
+    static let titleBarHeight: CGFloat = 28
+
+    /// Dead centre of the usable part of the screen the pointer is on (NSWindow.center() sits it
+    /// a third of the way down instead).
+    @MainActor
+    static func centre(_ window: NSWindow) {
+        let mouse = NSEvent.mouseLocation
+        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main
+        else { return }
+        let area = screen.visibleFrame
+        let size = window.frame.size
+        window.setFrameOrigin(NSPoint(x: (area.midX - size.width / 2).rounded(), y: (area.midY - size.height / 2).rounded()))
     }
 }
 
@@ -85,9 +109,22 @@ struct SettingsView: View {
         } detail: {
             SettingsDetail(pane: self.store.settingsPane)
                 .id(self.store.settingsPane)
-                .navigationTitle(self.store.settingsPane.title)
+                .padding(.top, 12)
+                .overlay(alignment: .topLeading) {
+                    // Level with the window buttons, and on the same left edge as the section titles.
+                    // Its frame reaches below the title bar: views wholly inside that band aren't drawn.
+                    Text(self.store.settingsPane.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(height: SettingsWindow.titleBarHeight)
+                        .padding(.leading, 31)
+                        .frame(height: SettingsWindow.titleBarHeight + 12, alignment: .top)
+                        .offset(y: -SettingsWindow.titleBarHeight)
+                        .allowsHitTesting(false)
+                }
         }
         .toolbar(removing: .sidebarToggle)
+        // Switches, links and selections in the app's own colour rather than the system blue.
+        .tint(Theme.accent)
         .frame(minWidth: 720, minHeight: 500)
     }
 }
@@ -97,60 +134,65 @@ private struct SettingsSidebar: View {
     @Binding var selection: SettingsPane
 
     var body: some View {
-        List(selection: self.$selection) {
+        // No List selection: macOS paints that in the accent blue. Rows are buttons, and the chosen
+        // one gets the same soft fill the menu uses.
+        List {
             Section {
-                ForEach(SettingsPane.top, id: \.self) { pane in
-                    SidebarRow(pane: pane).tag(pane)
-                }
+                ForEach(SettingsPane.top, id: \.self) { self.row($0) }
             }
             Section {
-                ForEach(self.store.prefs.order) { id in
-                    ProviderSidebarRow(id: id).tag(SettingsPane.provider(id))
-                }
-                .onMove { self.store.prefs.move(from: $0, to: $1) }
+                ForEach(self.store.prefs.order) { self.row(.provider($0)) }
+                    .onMove { self.store.prefs.move(from: $0, to: $1) }
             } header: {
                 Text("Providers")
             }
             Section {
-                ForEach(SettingsPane.bottom, id: \.self) { pane in
-                    SidebarRow(pane: pane).tag(pane)
-                }
+                ForEach(SettingsPane.bottom, id: \.self) { self.row($0) }
             }
         }
         .listStyle(.sidebar)
     }
+
+    private func row(_ pane: SettingsPane) -> some View {
+        Button {
+            self.selection = pane
+        } label: {
+            SidebarRow(pane: pane)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.primary.opacity(pane == self.selection ? 0.1 : 0))
+                .padding(.horizontal, 10))
+        .accessibilityAddTraits(pane == self.selection ? .isSelected : [])
+    }
 }
 
 private struct SidebarRow: View {
+    @Environment(UsageStore.self) private var store
     let pane: SettingsPane
 
     var body: some View {
         Label {
-            Text(self.pane.title)
+            HStack(spacing: 6) {
+                Text(self.pane.title)
+                    .foregroundStyle(self.isOff ? .secondary : .primary)
+                Spacer(minLength: 0)
+                if case let .provider(id) = self.pane, !self.isOff {
+                    // Only trouble gets a dot; a dimmed name already says a provider is off.
+                    let status = ProviderStatus(model: self.store.providers[id]!, enabled: true)
+                    if status.level == .attention { StatusDot(status: status) }
+                }
+            }
         } icon: {
             PaneIcon(pane: self.pane, size: 20)
         }
     }
-}
 
-private struct ProviderSidebarRow: View {
-    @Environment(UsageStore.self) private var store
-    let id: ProviderID
-
-    var body: some View {
-        let enabled = self.store.isEnabled(self.id)
-        Label {
-            HStack {
-                Text(self.id.displayName)
-                    .foregroundStyle(enabled ? .primary : .secondary)
-                Spacer(minLength: 4)
-                StatusDot(status: ProviderStatus(model: self.store.providers[self.id]!, enabled: enabled))
-            }
-        } icon: {
-            PaneIcon(pane: .provider(self.id), size: 20)
-                .saturation(enabled ? 1 : 0)
-                .opacity(enabled ? 1 : 0.6)
-        }
+    private var isOff: Bool {
+        if case let .provider(id) = self.pane { !self.store.isEnabled(id) } else { false }
     }
 }
 
@@ -166,10 +208,13 @@ struct PaneIcon: View {
             .frame(width: self.size, height: self.size)
             .overlay {
                 if case let .provider(id) = self.pane {
-                    ProviderLogo(id: id, size: self.size * 0.58)
+                    ProviderLogo(id: id, size: self.size * 0.6 * id.opticalScale)
                 } else if let symbol = self.pane.symbol {
                     Image(systemName: symbol)
-                        .font(.system(size: self.size * 0.52, weight: .semibold))
+                        .resizable()
+                        .fontWeight(.semibold)
+                        .scaledToFit()
+                        .frame(width: self.size * self.pane.symbolScale, height: self.size * self.pane.symbolScale)
                 }
             }
             .foregroundStyle(.white)
@@ -207,41 +252,34 @@ private struct GeneralPane: View {
         @Bindable var prefs = self.store.prefs
         Form {
             Section {
-                Toggle(isOn: $store.opensAtLogin) {
-                    Text("Open at login")
-                    Text("Starts quietly in the menu bar when you log in.")
-                }
+                SettingRow("Open at login", detail: "Starts quietly in the menu bar when you log in.", isOn: $store.opensAtLogin)
             }
             Section {
-                Picker(selection: $prefs.limitsInterval) {
-                    ForEach(RefreshInterval.allCases) { Text($0.title).tag($0) }
-                } label: {
-                    Text("Check plan limits")
-                    Text("Providers turn away requests that come too often, so a few minutes apart is plenty.")
+                SettingRow("Check plan limits", detail: "Providers turn away requests that come too often, so a few minutes apart is plenty.") {
+                    Picker("Check plan limits", selection: $prefs.limitsInterval) {
+                        ForEach(RefreshInterval.allCases) { Text($0.title).tag($0) }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
                 }
-                Toggle(isOn: $prefs.refreshesOnOpen) {
-                    Text("Check when the menu opens")
-                    Text("At most once a minute, for the provider you're looking at.")
-                }
-                LabeledContent {
+                SettingRow("Check when the menu opens", detail: "At most once a minute, for the provider you're looking at.", isOn: $prefs.refreshesOnOpen)
+                SettingRow("Spend", detail: "Read from local logs within a second of them changing.") {
                     Button("Refresh All") { self.store.refreshAll() }
-                } label: {
-                    Text("Spend")
-                    Text("Read from local logs within a second of them changing.")
                 }
             } header: {
                 Text("Updates")
             }
             Section {
-                Picker(selection: Binding(get: { prefs.weekStart }, set: { self.store.setWeekStart($0) })) {
-                    Text("Each plan's weekly reset").tag(0)
-                    Divider()
-                    ForEach(Self.weekdays, id: \.self) { day in
-                        Text(Calendar.current.weekdaySymbols[day - 1]).tag(day)
+                SettingRow("Weeks start", detail: "Weekly windows in the menu line up with this. Providers without a weekly limit start on Monday.") {
+                    Picker("Weeks start", selection: Binding(get: { prefs.weekStart }, set: { self.store.setWeekStart($0) })) {
+                        Text("Each plan's weekly reset").tag(0)
+                        Divider()
+                        ForEach(Self.weekdays, id: \.self) { day in
+                            Text(Calendar.current.weekdaySymbols[day - 1]).tag(day)
+                        }
                     }
-                } label: {
-                    Text("Weeks start")
-                    Text("Weekly windows in the menu line up with this. Providers without a weekly limit start on Monday.")
+                    .labelsHidden()
+                    .fixedSize()
                 }
             } header: {
                 Text("Weekly windows")
@@ -305,10 +343,7 @@ private struct MenuBarPane: View {
                         .tag(ProviderID?.some(id))
                     }
                 }
-                Toggle(isOn: $prefs.warnsInMenuBar) {
-                    Text("Turn red when a limit is nearly used up")
-                    Text("Under 10% left, with “Lowest limit left” shown.")
-                }
+                SettingRow("Turn red when a limit is nearly used up", detail: "Under 10% left, with “Lowest limit left” shown.", isOn: $prefs.warnsInMenuBar)
                 .disabled(prefs.menuBarDisplay != .limit)
             } header: {
                 Text("Text")
@@ -382,32 +417,14 @@ private struct MenuPane: View {
         @Bindable var prefs = self.store.prefs
         Form {
             Section {
-                Toggle(isOn: $prefs.showsLimits) {
-                    Text("Plan limits")
-                    Text("Session, weekly and other windows, with how long until each resets.")
-                }
-                Toggle(isOn: $prefs.showsPace) {
-                    Text("Pace")
-                    Text("Whether you're ahead of or behind an even pace, and when you'd run out.")
-                }
+                SettingRow("Plan limits", detail: "Session, weekly and other windows, with how long until each resets.", isOn: $prefs.showsLimits)
+                SettingRow("Pace", detail: "Whether you're ahead of or behind an even pace, and when you'd run out.", isOn: $prefs.showsPace)
                 .disabled(!prefs.showsLimits)
                 .padding(.leading, 18)
-                Toggle(isOn: $prefs.showsToday) {
-                    Text("Today and this window")
-                    Text("The two big figures.")
-                }
-                Toggle(isOn: $prefs.showsHistory) {
-                    Text("Last 30 days")
-                    Text("A bar for each day. Hover one for its figure.")
-                }
-                Toggle(isOn: $prefs.showsWindows) {
-                    Text("Weekly windows")
-                    Text("Spend in this week's window and the three before it.")
-                }
-                Toggle(isOn: $prefs.showsTopModel) {
-                    Text("Top model")
-                    Text("The model behind most of the spend.")
-                }
+                SettingRow("Today and this window", detail: "The two big figures.", isOn: $prefs.showsToday)
+                SettingRow("Last 30 days", detail: "A bar for each day. Hover one for its figure.", isOn: $prefs.showsHistory)
+                SettingRow("Weekly windows", detail: "Spend in this week's window and the three before it.", isOn: $prefs.showsWindows)
+                SettingRow("Top model", detail: "The model behind most of the spend.", isOn: $prefs.showsTopModel)
             } header: {
                 Text("Sections")
             }
@@ -427,10 +444,7 @@ private struct MenuPane: View {
                 Footnote("Looks like “\(Format.reset(sample, now: Date(), style: prefs.resetStyle))”.")
             }
             Section {
-                Toggle(isOn: $prefs.hidesEmail) {
-                    Text("Hide email address")
-                    Text("Shows \(ProviderModel.masked("you@example.com")) instead, for screen sharing.")
-                }
+                SettingRow("Hide email address", detail: "Shows \(ProviderModel.masked("you@example.com")) instead, for screen sharing.", isOn: $prefs.hidesEmail)
             } header: {
                 Text("Privacy")
             }
@@ -461,27 +475,18 @@ private struct NotificationsPane: View {
                 }
             }
             Section {
-                Toggle(isOn: self.asking($prefs.notifiesLow)) {
-                    Text("When a limit runs low")
-                    Text("Once per window, for every provider in the menu.")
-                }
+                SettingRow("When a limit runs low", detail: "Once per window, for every provider in the menu.", isOn: self.asking($prefs.notifiesLow))
                 Picker("Below", selection: $prefs.lowThreshold) {
                     ForEach([50, 25, 20, 10, 5], id: \.self) { Text("\($0)% left").tag($0) }
                 }
                 .disabled(!prefs.notifiesLow)
                 .padding(.leading, 18)
-                Toggle(isOn: self.asking($prefs.notifiesReset)) {
-                    Text("When a low limit resets")
-                    Text("So you know you can get back to it.")
-                }
+                SettingRow("When a low limit resets", detail: "So you know you can get back to it.", isOn: self.asking($prefs.notifiesReset))
             } header: {
                 Text("Limits")
             }
             Section {
-                Toggle(isOn: self.asking($prefs.notifiesSpend)) {
-                    Text("When a day's spend passes an amount")
-                    Text("Once a day per provider, at API prices.")
-                }
+                SettingRow("When a day's spend passes an amount", detail: "Once a day per provider, at API prices.", isOn: self.asking($prefs.notifiesSpend))
                 LabeledContent("Amount") {
                     HStack(spacing: 6) {
                         TextField("Amount", value: $prefs.spendThreshold, format: .currency(code: "USD").precision(.fractionLength(0)).locale(Locale(identifier: "en_US")))
@@ -498,16 +503,14 @@ private struct NotificationsPane: View {
                 Text("Spend")
             }
             Section {
-                LabeledContent {
+                SettingRow("Test notification",
+                           detail: self.permission == .allowed ? "Notifications are allowed." : "macOS asks for permission the first time.") {
                     Button("Send Test") {
                         Task {
                             self.permission = await Notifier.shared.requestPermission()
                             Notifier.shared.sendTest()
                         }
                     }
-                } label: {
-                    Text("Test notification")
-                    Text(self.permission == .allowed ? "Notifications are allowed." : "macOS asks for permission the first time.")
                 }
             }
         }
@@ -848,15 +851,12 @@ private struct AdvancedPane: View {
 
     private var prices: some View {
             Section {
-                LabeledContent {
+                SettingRow("Model prices", detail: self.pricesNote ?? self.pricesStatus) {
                     HStack(spacing: 8) {
                         if self.updatingPrices { ProgressView().controlSize(.small) }
                         Button("Update Now") { self.updatePrices() }
                             .disabled(self.updatingPrices)
                     }
-                } label: {
-                    Text("Model prices")
-                    Text(self.pricesNote ?? self.pricesStatus)
                 }
             } header: {
                 Text("Prices")
@@ -867,15 +867,11 @@ private struct AdvancedPane: View {
 
     private var data: some View {
             Section {
-                LabeledContent {
+                SettingRow("Data folder", detail: AppPaths.support.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")) {
                     Button("Show in Finder") {
                         try? FileManager.default.createDirectory(at: AppPaths.support, withIntermediateDirectories: true)
                         NSWorkspace.shared.activateFileViewerSelecting([AppPaths.support])
                     }
-                } label: {
-                    Text("Data folder")
-                    Text(AppPaths.support.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
-                        .textSelection(.enabled)
                 }
             } header: {
                 Text("Data")
@@ -886,18 +882,12 @@ private struct AdvancedPane: View {
 
     private var reset: some View {
             Section {
-                LabeledContent {
+                SettingRow("Saved keys", detail: "The Devin token and Factory API key in your Keychain.") {
                     Button("Remove…") { self.confirmsKeys = true }
-                        .disabled(!self.store.hasSecret(.devinToken) && !self.store.hasSecret(.droidAPIKey))
-                } label: {
-                    Text("Saved keys")
-                    Text("The Devin token and Factory API key in your Keychain.")
                 }
-                LabeledContent {
+                .disabled(!self.store.hasSecret(.devinToken) && !self.store.hasSecret(.droidAPIKey))
+                SettingRow("All settings", detail: "Back to how a fresh install starts. Keys and providers stay.") {
                     Button("Reset…") { self.confirmsReset = true }
-                } label: {
-                    Text("All settings")
-                    Text("Back to how a fresh install starts. Keys and providers stay.")
                 }
             } header: {
                 Text("Reset")
@@ -956,6 +946,47 @@ private struct AboutPane: View {
 
 // MARK: - Bits
 
+/// A form row: a title and an optional line of detail on the left, its control centred on the
+/// right. The stock row pins controls to the title's line, which looks off on two-line rows.
+struct SettingRow<Control: View>: View {
+    @Environment(\.isEnabled) private var isEnabled
+    let title: String
+    let detail: String?
+    let control: Control
+
+    init(_ title: String, detail: String? = nil, @ViewBuilder control: () -> Control) {
+        self.title = title
+        self.detail = detail
+        self.control = control()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(self.title)
+                    .foregroundStyle(self.isEnabled ? .primary : .tertiary)
+                if let detail = self.detail {
+                    Text(detail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(self.isEnabled ? .secondary : .tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 0)
+            self.control
+        }
+    }
+}
+
+extension SettingRow {
+    /// A switch row.
+    init(_ title: String, detail: String? = nil, isOn: Binding<Bool>) where Control == AnyView {
+        self.init(title, detail: detail) {
+            AnyView(Toggle(title, isOn: isOn).labelsHidden().toggleStyle(.switch).controlSize(.mini))
+        }
+    }
+}
+
 private struct Footnote: View {
     let text: String
     init(_ text: String) { self.text = text }
@@ -965,8 +996,8 @@ private struct Footnote: View {
             .font(.system(size: 11))
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
     }
 }
 

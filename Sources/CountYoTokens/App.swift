@@ -346,6 +346,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         NSApp.setActivationPolicy(.regular)
         window.collectionBehavior.insert([.moveToActiveSpace, .fullScreenAuxiliary])
         if window.isMiniaturized { window.deminiaturize(nil) }
+        // Every time it opens, it opens in the middle of the screen.
+        if !window.isVisible { SettingsWindow.centre(window) }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         // The policy change lands on a later turn of the run loop; ask again once it has.
