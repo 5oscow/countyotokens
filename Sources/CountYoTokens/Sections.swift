@@ -84,6 +84,7 @@ struct SwitcherSection: View {
         .padding(.horizontal, Theme.inset - 6)
         .padding(.vertical, 2)
         .animation(.easeOut(duration: 0.12), value: self.hovered)
+        .onChange(of: self.store.menuClosings) { self.hovered = nil }
     }
 }
 
@@ -129,44 +130,87 @@ struct LimitsSection: View {
     var body: some View {
         let limits = self.model.limits
         let prefs = self.store.prefs
+        let issue = self.model.limitsIssue
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 SectionTitle(text: "Limits")
                 Spacer()
-                if limits != nil || self.model.limitsIssue == nil {
+                if let limits, issue != nil {
+                    // Last known figures: say when they're from.
+                    Text("as of \(Format.asOf(limits.fetchedAt))")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .monospacedDigit()
+                } else if issue == nil {
                     Text(prefs.limitFigure == .left ? "left" : "used")
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                 }
             }
-            if limits == nil, let issue = self.model.limitsIssue {
-                Text(self.model.message(for: issue))
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
+            if let issue {
+                NoticeView(notice: self.model.notice(for: issue), isBusy: self.model.isFetchingLimits)
+                    .transition(.opacity)
+            }
+            if limits != nil || issue == nil {
                 // One clock for every row, so countdowns tick together and a passed reset shows full.
                 TimelineView(.periodic(from: .now, by: 30)) { context in
                     VStack(spacing: 11) {
                         ForEach((limits ?? .placeholder()).items) { limit in
                             LimitRow(limit: limit, now: context.date, figure: prefs.limitFigure,
-                                     resetStyle: prefs.resetStyle, showsPace: prefs.showsPace)
+                                     resetStyle: prefs.resetStyle, showsPace: prefs.showsPace,
+                                     isStale: issue != nil)
                         }
                     }
                 }
                 .redacted(reason: limits == nil ? .placeholder : [])
-                if limits != nil, let issue = self.model.limitsIssue {
-                    Text(self.model.message(for: issue))
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .transition(.opacity)
-                }
             }
         }
         .modifier(SectionInsets(top: 6, bottom: 7))
     }
+}
 
+/// A limits problem in plain words, with the one thing to do about it as a text button.
+private struct NoticeView: View {
+    @Environment(UsageStore.self) private var store
+    let notice: LimitsNotice
+    let isBusy: Bool
+    @State private var hovered = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(self.notice.text)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let button = self.notice.button, let action = self.notice.action {
+                Button {
+                    switch action {
+                    case .useClaudeApp: self.store.useClaudeApp()
+                    case .openSettings: Main.delegate.openSettingsFromMenu()
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Text(self.isBusy && action == .useClaudeApp ? "Waiting for macOS…" : button)
+                        if !self.isBusy {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 8.5, weight: .bold))
+                                .offset(x: self.hovered ? 2 : 0)
+                        }
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.accent)
+                    .opacity(self.isBusy ? 0.6 : 1)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(self.isBusy)
+                .onHover { self.hovered = $0 }
+                .animation(.easeOut(duration: 0.15), value: self.hovered)
+                .onChange(of: self.store.menuClosings) { self.hovered = false }
+            }
+        }
+        .padding(.bottom, 2)
+    }
 }
 
 private struct LimitRow: View {
@@ -175,15 +219,19 @@ private struct LimitRow: View {
     let figure: LimitFigure
     let resetStyle: ResetStyle
     let showsPace: Bool
+    /// Last known figures while limits can't be fetched: drawn grey, with no pace.
+    var isStale = false
 
     /// Once the reset passes, the stored figure is stale and the limit is full again.
     private var hasReset: Bool { self.limit.resetsAt.map { $0 <= self.now } ?? false }
+    /// Reset since the last fetch, and nothing newer can be fetched: the real figure isn't known.
+    private var isUnknown: Bool { self.isStale && self.hasReset }
     private var left: Double { self.hasReset ? 100 : self.limit.leftPercent }
     /// What the row shows and the bar fills to: percent left, or percent used.
     private var shown: Double { self.figure == .left ? self.left : 100 - self.left }
 
     var body: some View {
-        let pace = self.hasReset || !self.showsPace ? nil : self.limit.pace(now: self.now)
+        let pace = self.hasReset || self.isStale || !self.showsPace ? nil : self.limit.pace(now: self.now)
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(self.limit.title)
@@ -194,15 +242,16 @@ private struct LimitRow: View {
                     .foregroundStyle(.tertiary)
                     .contentTransition(.numericText())
                     .help(self.limit.resetsAt.map { "Resets \($0.formatted(.dateTime.weekday(.wide).day().month().hour().minute()))" } ?? "")
-                Text("\(Int(self.shown.rounded()))%")
+                Text(self.isUnknown ? "–" : "\(Int(self.shown.rounded()))%")
                     .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(self.isLow ? AnyShapeStyle(Color.red) : AnyShapeStyle(.primary))
+                    .foregroundStyle(self.isStale ? AnyShapeStyle(.secondary) : self.isLow ? AnyShapeStyle(Color.red) : AnyShapeStyle(.primary))
                     .contentTransition(.numericText(value: self.shown))
                     .frame(width: 40, alignment: .trailing)
             }
             .monospacedDigit()
-            Meter(fraction: self.shown / 100, height: Meter.limitHeight,
-                  fill: self.isLow ? AnyShapeStyle(Color.red) : AnyShapeStyle(Theme.accent),
+            Meter(fraction: self.isUnknown ? 0 : self.shown / 100, height: Meter.limitHeight,
+                  fill: self.isStale ? AnyShapeStyle(Color.primary.opacity(0.28))
+                      : self.isLow ? AnyShapeStyle(Color.red) : AnyShapeStyle(Theme.accent),
                   mark: pace.map { self.paceMark($0) / 100 })
                 .padding(.top, 1)
                 .help(pace.map { "Even pace would leave \(Int((100 - $0.expectedUsedPercent).rounded()))% by now" } ?? "")
@@ -222,7 +271,7 @@ private struct LimitRow: View {
 
     private var resetText: String {
         guard let reset = self.limit.resetsAt else { return "" }
-        if self.hasReset { return "reset" }
+        if self.hasReset { return self.isStale ? "has reset since" : "reset" }
         return Format.reset(reset, now: self.now, style: self.resetStyle)
     }
 }
@@ -381,8 +430,8 @@ struct HistorySection: View {
             .monospacedDigit()
         }
         .modifier(SectionInsets(top: 6, bottom: 7))
-        .animation(.easeOut(duration: 0.12), value: self.hoveredDay)
         .redacted(reason: self.model.snapshot == nil ? .placeholder : [])
+        .onChange(of: self.store.menuClosings) { self.hoveredDay = nil }
     }
 }
 
@@ -478,13 +527,80 @@ struct FooterSection: View {
             }
         }
         .modifier(SectionInsets(top: 4, bottom: 4))
+        .animation(.smooth(duration: 0.25), value: self.store.isRefreshing)
     }
 
     private func status(now: Date) -> String {
+        let source = self.model.id.hasSpend ? self.model.id.spendNote : "Limits from \(self.model.id.displayName)"
+        if let note = self.store.footerNote { return note }
+        if self.store.isRefreshing || self.model.isVisiblyRefreshing { return "\(source) · Updating…" }
         let updated = self.model.id.hasSpend ? self.model.updatedAt : self.model.limits?.fetchedAt
-        let freshness = self.model.isVisiblyRefreshing ? "Updating…"
-            : updated == nil && !self.model.id.hasSpend ? "Not updated yet" : Format.updated(updated, now: now)
-        return "\(self.model.id.hasSpend ? self.model.id.spendNote : "Limits from \(self.model.id.displayName)") · \(freshness)"
+        let freshness = updated == nil && !self.model.id.hasSpend ? "Not updated yet" : Format.updated(updated, now: now)
+        return "\(source) · \(freshness)"
+    }
+}
+
+// MARK: - Refresh, Settings, Quit
+
+/// One of the rows at the foot of the menu, drawn here rather than by the system so that Refresh
+/// can work with the menu still open (a standard item always closes it) and so the highlight is the
+/// same soft fill as the tabs, not the system's blue. Sized and spaced like a standard item.
+struct ActionRow: View {
+    @Environment(UsageStore.self) private var store
+    let action: MenuAction
+    let perform: @MainActor () -> Void
+    @State private var hovered = false
+    @State private var turns = 0.0
+
+    private var isBusy: Bool { self.action == .refresh && self.store.isRefreshing }
+
+    var body: some View {
+        Button(action: self.perform) {
+            HStack(spacing: 6) {
+                Image(systemName: self.action.symbol)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .rotationEffect(.degrees(self.turns * 360))
+                    .frame(width: 16, height: 16)
+                    .foregroundStyle(.secondary)
+                Text(self.action.title)
+                    .font(.system(size: 13))
+                Spacer(minLength: 8)
+                Text(self.action.shortcut)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, Theme.inset - ActionRow.highlightInset)
+            .frame(height: 24)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(ActionRowStyle(highlighted: self.hovered || self.store.highlightedAction == self.action))
+        .padding(.horizontal, ActionRow.highlightInset)
+        .onHover { self.hovered = $0 }
+        .onChange(of: self.store.menuClosings) { self.hovered = false }
+        .task(id: self.isBusy) {
+            // A full turn at a time for as long as the refresh runs, so the arrow always comes to
+            // rest upright instead of snapping back.
+            while self.isBusy, !Task.isCancelled {
+                withAnimation(.easeInOut(duration: 0.65)) { self.turns += 1 }
+                try? await Task.sleep(for: .milliseconds(650))
+            }
+        }
+        .accessibilityLabel(self.action.title)
+    }
+
+    static let highlightInset: CGFloat = 5
+}
+
+private struct ActionRowStyle: ButtonStyle {
+    let highlighted: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Color.primary.opacity(configuration.isPressed ? 0.16 : self.highlighted ? 0.1 : 0))
+            }
+            .animation(.easeOut(duration: 0.1), value: self.highlighted)
     }
 }
 

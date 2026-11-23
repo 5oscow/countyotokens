@@ -7,6 +7,12 @@ import TokenCore
 /// and dark, into PNGs, then quits. Checks the real views without touching the screen.
 @MainActor
 enum Snapshots {
+    /// `-snapshotHeight <points>` draws the Settings panes taller, to see what a pane holds below the fold.
+    private static var settingsHeight: CGFloat {
+        let height = UserDefaults.standard.double(forKey: "snapshotHeight")
+        return height > 0 ? height : 580
+    }
+
     static var folder: String? { UserDefaults.standard.string(forKey: "snapshot") ?? self.readmeFolder }
     /// `-readme <folder>` (with `-demo`): the README's pictures, framed, light and dark.
     private static var readmeFolder: String? { UserDefaults.standard.string(forKey: "readme") }
@@ -34,7 +40,7 @@ enum Snapshots {
                     try? await Task.sleep(for: .milliseconds(150))
                     let name = pane.title.lowercased().replacingOccurrences(of: " ", with: "-")
                     self.render(SettingsView(), store: store, appearance: appearance,
-                                size: NSSize(width: 800, height: 580), to: "\(folder)/settings-\(name)-\(suffix).png")
+                                size: NSSize(width: 800, height: self.settingsHeight), to: "\(folder)/settings-\(name)-\(suffix).png")
                 }
             }
             store.selected = original

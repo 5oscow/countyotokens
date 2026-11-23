@@ -13,6 +13,9 @@ final class Preferences {
     /// 0 follows each plan's weekly reset; 1…7 pins every provider to that weekday (1 = Sunday).
     var weekStart: Int { didSet { self.save(self.weekStart, Keys.weekStart) } }
 
+    /// Claude limits may use the Claude desktop app's sign-in when Claude Code's has lapsed.
+    var usesClaudeApp: Bool { didSet { self.save(self.usesClaudeApp, Keys.usesClaudeApp) } }
+
     // MARK: Menu bar
 
     var menuBarDisplay: MenuBarDisplay { didSet { self.save(self.menuBarDisplay.rawValue, Keys.menuBar) } }
@@ -50,6 +53,7 @@ final class Preferences {
         static let limitsInterval = "limitsInterval"
         static let refreshesOnOpen = "refreshesOnOpen"
         static let weekStart = "weekStart"
+        static let usesClaudeApp = "usesClaudeApp"
         static let menuBar = "menuBarDisplay"
         static let menuBarProvider = "menuBarProvider"
         static let iconStyle = "iconStyle"
@@ -70,7 +74,7 @@ final class Preferences {
         static let spendThreshold = "spendThreshold"
         static let order = "providerOrder"
 
-        static let all = [limitsInterval, refreshesOnOpen, weekStart, menuBar, menuBarProvider, iconStyle, warnsInMenuBar,
+        static let all = [limitsInterval, refreshesOnOpen, weekStart, usesClaudeApp, menuBar, menuBarProvider, iconStyle, warnsInMenuBar,
                           showsLimits, showsPace, showsToday, showsHistory, showsWindows, showsTopModel, limitFigure,
                           resetStyle, hidesEmail, notifiesLow, lowThreshold, notifiesReset, notifiesSpend,
                           spendThreshold, order]
@@ -86,6 +90,7 @@ final class Preferences {
         self.limitsInterval = RefreshInterval(rawValue: int(Keys.limitsInterval, RefreshInterval.threeMinutes.rawValue)) ?? .threeMinutes
         self.refreshesOnOpen = bool(Keys.refreshesOnOpen, true)
         self.weekStart = min(7, max(0, int(Keys.weekStart, 0)))
+        self.usesClaudeApp = bool(Keys.usesClaudeApp, false)
         self.menuBarDisplay = value(Keys.menuBar, d.bool(forKey: "showsSpendInMenuBar") ? MenuBarDisplay.spend : .icon)
         self.menuBarProvider = d.string(forKey: Keys.menuBarProvider).flatMap(ProviderID.init(rawValue:))
         self.iconStyle = value(Keys.iconStyle, IconStyle.tally)
@@ -127,6 +132,7 @@ final class Preferences {
         self.limitsInterval = fresh.limitsInterval
         self.refreshesOnOpen = fresh.refreshesOnOpen
         self.weekStart = fresh.weekStart
+        self.usesClaudeApp = fresh.usesClaudeApp
         self.menuBarDisplay = fresh.menuBarDisplay
         self.menuBarProvider = fresh.menuBarProvider
         self.iconStyle = fresh.iconStyle

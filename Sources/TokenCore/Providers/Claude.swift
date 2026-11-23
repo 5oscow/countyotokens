@@ -1,8 +1,9 @@
 import Foundation
 
-/// Reads Claude Code's own OAuth token and asks Anthropic for the plan's limits. The token is only
-/// ever sent to api.anthropic.com, never stored, logged or refreshed here (refreshing would rotate
-/// Claude Code's refresh token from under it).
+/// Asks Anthropic for the plan's limits with a sign-in already on this Mac: Claude Code's own OAuth
+/// token, or the Claude desktop app's when the user has allowed that. Tokens are only ever sent to
+/// api.anthropic.com and never refreshed here (refreshing would rotate the owner's refresh token
+/// from under it).
 public enum ClaudeLimits {
     static let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
     static let keychainService = "Claude Code-credentials"
@@ -10,17 +11,44 @@ public enum ClaudeLimits {
     struct Credentials {
         var accessToken: String
         var expiresAt: Date?
+        /// Claude Code treats a sign-in without scopes as signed out and won't renew it. That's what
+        /// sessions started by the desktop app leave behind.
+        var isRenewable = true
+
+        var isLive: Bool { self.expiresAt.map { $0 > Date() } ?? true }
     }
 
-    /// `mayRenew`: when the sign-in has expired, have Claude Code renew it and try once more. Only for
-    /// fetches the user asked for (opening the menu, refreshing), as CodexBar does.
-    public static func fetch(mayRenew: Bool = false) async throws(LimitsError) -> PlanLimits {
-        do {
-            return try await self.fetchOnce()
-        } catch .expired where mayRenew {
-            guard await ClaudeRenewal.shared.renew() else { throw .expired }
-            return try await self.fetchOnce()
+    /// Tries, in order: Claude Code's sign-in while it's valid, the desktop app's (`desktop`), then
+    /// having Claude Code renew its own (`mayRenew`, only for fetches the user asked for).
+    ///
+    /// Throws `.signedOut` when nothing on this Mac can be renewed, `.needsKey` when the desktop
+    /// app's sign-in is waiting for the user's OK in the Keychain, `.expired` otherwise.
+    public static func fetch(mayRenew: Bool = false, desktop: ClaudeDesktop.Access = .off) async throws(LimitsError) -> PlanLimits {
+        let cli = self.readCredentials()
+        if let cli, cli.isLive {
+            do throws(LimitsError) {
+                return try await self.fetch(token: cli.accessToken)
+            } catch {
+                guard error == .expired else { throw error }
+            }
         }
+        var needsApproval = false
+        if desktop != .off {
+            do throws(LimitsError) {
+                return try await self.fetchWithDesktopApp(desktop)
+            } catch {
+                switch error {
+                case .needsKey: needsApproval = true
+                case .expired, .signedOut: break
+                default: throw error
+                }
+            }
+        }
+        if mayRenew, cli?.isRenewable == true, await ClaudeRenewal.shared.renew(), let renewed = self.readCredentials() {
+            return try await self.fetch(token: renewed.accessToken)
+        }
+        if needsApproval { throw .needsKey }
+        throw cli?.isRenewable == true || desktop != .off ? .expired : .signedOut
     }
 
     /// Has Claude Code renew its sign-in now (tokbench). True when the Keychain holds a fresh one.
@@ -28,11 +56,37 @@ public enum ClaudeLimits {
         await ClaudeRenewal.shared.renew()
     }
 
-    private static func fetchOnce() async throws(LimitsError) -> PlanLimits {
-        guard let credentials = self.readCredentials() else { throw .signedOut }
-        if let expiry = credentials.expiresAt, expiry < Date() { throw .expired }
+    /// The token that last worked is kept (in our own Keychain item), so the desktop app's storage
+    /// is only opened again when that one stops working.
+    private static func fetchWithDesktopApp(_ access: ClaudeDesktop.Access) async throws(LimitsError) -> PlanLimits {
+        if let cached = Secrets.get(.claudeDesktopToken) {
+            do throws(LimitsError) {
+                return try await self.fetch(token: cached)
+            } catch {
+                guard error == .expired else { throw error }
+                Secrets.set(.claudeDesktopToken, nil)
+            }
+        }
+        switch ClaudeDesktop.accessTokens(access) {
+        case .unavailable: throw .signedOut
+        case .needsApproval: throw .needsKey
+        case let .tokens(tokens):
+            for token in tokens.prefix(4) {
+                do throws(LimitsError) {
+                    let limits = try await self.fetch(token: token)
+                    Secrets.set(.claudeDesktopToken, token)
+                    return limits
+                } catch {
+                    guard error == .expired else { throw error }
+                }
+            }
+            throw .expired
+        }
+    }
+
+    private static func fetch(token: String) async throws(LimitsError) -> PlanLimits {
         let json = try await HTTP.json(self.endpoint, headers: [
-            "Authorization": "Bearer \(credentials.accessToken)",
+            "Authorization": "Bearer \(token)",
             "Content-Type": "application/json",
             "anthropic-beta": "oauth-2025-04-20",
             "User-Agent": "claude-cli/2.1.0 (external, cli)",
@@ -96,6 +150,7 @@ public enum ClaudeLimits {
               let token = JSONValue.string(oauth["accessToken"])
         else { return nil }
         let expiry = JSONValue.number(oauth["expiresAt"]).map { Date(timeIntervalSince1970: $0 / 1000) }
-        return Credentials(accessToken: token, expiresAt: expiry)
+        let scopes = oauth["scopes"] as? [Any] ?? []
+        return Credentials(accessToken: token, expiresAt: expiry, isRenewable: !scopes.isEmpty)
     }
 }

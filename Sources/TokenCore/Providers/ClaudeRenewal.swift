@@ -21,8 +21,9 @@ actor ClaudeRenewal {
         self.running = task
         let renewed = await task.value
         self.running = nil
-        // CodexBar's cooldowns: wait 5 minutes after a renewal, 20 seconds after a miss.
-        self.cooldown = renewed ? 5 * 60 : 20
+        // Five minutes either way: a miss means Claude Code won't renew this sign-in, and asking
+        // again on every menu open would only start it over and over.
+        self.cooldown = 5 * 60
         return renewed
     }
 

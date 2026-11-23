@@ -27,7 +27,8 @@ struct DailyBars: View {
                             .frame(maxWidth: .infinity)
                     }
                 }
-                if average > 0 {
+                // Hard against the baseline the dashes would only tangle with the empty days' stubs.
+                if average > 0, height * average / peak >= 6 {
                     Path { path in
                         let y = height - height * average / peak
                         path.move(to: CGPoint(x: 0, y: y))

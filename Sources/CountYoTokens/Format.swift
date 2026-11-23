@@ -82,6 +82,14 @@ enum Format {
         }
     }
 
+    /// `18:47` today, `Sat 18:47` this week, `2 Nov` before that.
+    static func asOf(_ date: Date, now: Date = Date()) -> String {
+        let time = date.formatted(date: .omitted, time: .shortened)
+        if Calendar.current.isDate(date, inSameDayAs: now) { return time }
+        if now.timeIntervalSince(date) < 6 * 86_400 { return "\(date.formatted(.dateTime.weekday(.abbreviated))) \(time)" }
+        return date.formatted(.dateTime.day().month(.abbreviated))
+    }
+
     static func updated(_ date: Date?, now: Date) -> String {
         guard let date else { return "Not scanned yet" }
         let seconds = now.timeIntervalSince(date)

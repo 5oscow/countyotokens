@@ -19,6 +19,8 @@ final class ProviderModel: Identifiable {
     private(set) var limits: PlanLimits?
     /// Why limits can't be fetched right now, when it's something the user can act on.
     private(set) var limitsIssue: LimitsError?
+    /// A limits fetch is on its way (a Keychain prompt may be holding it up).
+    private(set) var isFetchingLimits = false
     private(set) var account: Account?
 
     /// Weekly spend windows. Pinned to the provider's reported weekly reset when it has one,
@@ -112,6 +114,7 @@ final class ProviderModel: Identifiable {
         self.watcher = nil
         self.limitsTask?.cancel()
         self.limitsTask = nil
+        self.isFetchingLimits = false
     }
 
     // MARK: Spend
@@ -168,16 +171,23 @@ final class ProviderModel: Identifiable {
     /// background, at most once a minute when the menu opens.
     ///
     /// `userInitiated` lets a provider recover from an expired sign-in on the way (see ProviderLimits).
-    func refreshLimits(minimumAge: TimeInterval = 170, userInitiated: Bool = false) {
+    /// `asksKeychain`: the user pressed the button for the Claude app's sign-in, so macOS may ask.
+    func refreshLimits(minimumAge: TimeInterval = 170, userInitiated: Bool = false, asksKeychain: Bool = false) {
         guard self.id.hasLimits, !self.isDemo else { return }
         let now = Date()
-        // An expired sign-in shouldn't wait out the usual spacing once the user is looking.
-        let minimumAge = userInitiated && self.limitsIssue == .expired ? 0 : minimumAge
+        // A sign-in problem shouldn't wait out the usual spacing once the user is looking.
+        let minimumAge = userInitiated && self.limitsIssue != nil ? 0 : minimumAge
         guard self.limitsTask == nil, now >= self.limitsBlockedUntil,
               now.timeIntervalSince(self.limitsCheckedAt) >= minimumAge else { return }
         self.limitsCheckedAt = now
         let id = self.id
-        let credentials = self.credentials()
+        var credentials = self.credentials()
+        if id == .claude, UserDefaults.standard.bool(forKey: "usesClaudeApp") {
+            // A background refresh opens the Keychain only once macOS lets this build read it
+            // without asking; see ClaudeDesktop.
+            credentials.claudeDesktop = asksKeychain ? .ask : userInitiated ? .ifApproved : .ifSilent
+        }
+        self.isFetchingLimits = true
         self.limitsTask = Task {
             let result: Result<PlanLimits, LimitsError>
             do throws(LimitsError) {
@@ -187,16 +197,30 @@ final class ProviderModel: Identifiable {
             }
             self.apply(result)
             self.limitsTask = nil
+            self.isFetchingLimits = false
         }
     }
 
+    /// Returns once the limits fetch in flight (if any) has landed.
+    func waitForLimits() async { await self.limitsTask?.value }
+
+    /// When the service asked us to hold off until, while that's still ahead.
+    var limitsRetryAt: Date? {
+        let until = self.limitsBlockedUntil
+        return until > Date() ? until : nil
+    }
+
+    /// The figures on show are from before a sign-in problem: last known, not current.
+    var limitsAreStale: Bool { self.limitsIssue != nil && self.limits != nil }
+
     /// After a key changes in Settings: forget the backoff and fetch now.
-    func credentialsChanged() {
+    func credentialsChanged(userInitiated: Bool = false) {
         self.limitsBlockedUntil = .distantPast
         self.limitsCheckedAt = .distantPast
         self.limitsTask?.cancel()
         self.limitsTask = nil
-        self.refreshLimits()
+        self.isFetchingLimits = false
+        self.refreshLimits(userInitiated: userInitiated)
     }
 
     private func apply(_ result: Result<PlanLimits, LimitsError>) {
@@ -294,6 +318,21 @@ final class UsageStore {
 
     /// The Settings pane to show; set before opening the window to land on a provider.
     var settingsPane: SettingsPane = .general
+
+    /// A refresh the user asked for is running (the Refresh row turns while it does).
+    private(set) var isRefreshing = false
+    /// A line the footer shows for a few seconds after a refresh that couldn't fetch.
+    private(set) var footerNote: String?
+    /// The menu row the keyboard is on, if any.
+    var highlightedAction: MenuAction?
+    /// Counts the menu's closings. A view under the pointer when the menu closes is never told the
+    /// pointer left, so hover states reset on this instead of showing up stuck at the next opening.
+    private(set) var menuClosings = 0
+
+    func menuDidClose() {
+        self.highlightedAction = nil
+        self.menuClosings += 1
+    }
 
     private var loginItemRevision = 0
     @ObservationIgnored private var timer: Timer?
@@ -399,9 +438,48 @@ final class UsageStore {
         return self.current
     }
 
+    /// The Refresh row: every enabled provider, in place, with the menu still open. Always takes
+    /// long enough to be seen, and says so when a service won't be asked yet.
     func refreshNow() {
-        self.current.refresh()
-        self.current.refreshLimits(minimumAge: 30, userInitiated: true)
+        guard !self.isRefreshing else { return }
+        self.isRefreshing = true
+        self.footerNote = nil
+        let model = self.current
+        for id in self.enabled {
+            self.providers[id]?.refresh()
+            self.providers[id]?.refreshLimits(minimumAge: 15, userInitiated: true)
+        }
+        Task {
+            let started = ContinuousClock.now
+            await model.waitForLimits()
+            let shortfall = Duration.milliseconds(650) - started.duration(to: .now)
+            if shortfall > .zero { try? await Task.sleep(for: shortfall) }
+            self.isRefreshing = false
+            if let retry = model.limitsRetryAt {
+                self.flash("\(model.id.displayName) asked to wait \(Format.countdown(to: retry, from: Date()))")
+            }
+        }
+    }
+
+    private func flash(_ note: String) {
+        withAnimation(.smooth(duration: 0.25)) { self.footerNote = note }
+        Task {
+            try? await Task.sleep(for: .seconds(5))
+            if self.footerNote == note { withAnimation(.smooth(duration: 0.25)) { self.footerNote = nil } }
+        }
+    }
+
+    /// Turns on the Claude desktop app's sign-in and reads it now. macOS asks for the user's OK.
+    func useClaudeApp() {
+        self.prefs.usesClaudeApp = true
+        self.providers[.claude]?.refreshLimits(minimumAge: 0, userInitiated: true, asksKeychain: true)
+    }
+
+    /// Settings switched it off: forget the token kept from it, and fetch without.
+    func stopUsingClaudeApp() {
+        self.prefs.usesClaudeApp = false
+        Secrets.set(.claudeDesktopToken, nil)
+        self.providers[.claude]?.credentialsChanged()
     }
 
     func isEnabled(_ id: ProviderID) -> Bool { self.enabledSet.contains(id) }
@@ -478,20 +556,84 @@ extension ProviderModel {
         return "\(email[email.startIndex])•••\(email[at...])"
     }
 
-    func message(for issue: LimitsError) -> String {
+    func message(for issue: LimitsError) -> String { self.notice(for: issue).text }
+
+    /// What a limits problem says in the menu, and the one thing the user can do about it there.
+    func notice(for issue: LimitsError) -> LimitsNotice {
+        let usesClaudeApp = UserDefaults.standard.bool(forKey: "usesClaudeApp")
         switch (issue, self.id) {
-        case (.signedOut, .claude): "Sign in to Claude Code to see your plan limits."
-        case (.signedOut, .codex): "Sign in to Codex to see your plan limits."
-        case (.signedOut, .opencodeGo): "Connect OpenCode Go in OpenCode to see your limits."
-        case (.needsKey, .devin): "Sign in with the Devin CLI (devin auth login) to see your limits."
-        case (.needsKey, .droid): "Open app.factory.ai in your browser, or add a Factory API key in Settings."
-        case (.expired, .claude): "Paused until Claude Code renews its sign-in."
-        case (.expired, .codex): "Paused until Codex renews its sign-in."
-        case (.expired, .devin): "Devin didn't accept the sign-in. Run devin auth login again."
-        case (.expired, .droid): "Factory didn't accept the sign-in or API key."
-        case (.expired, _): "\(self.id.displayName) didn't accept the key."
-        case (.signedOut, _), (.needsKey, _): "Sign in to \(self.id.displayName) to see your limits."
-        case (.rateLimited, _), (.failed, _): "Couldn't reach \(self.id.displayName)."
+        case (.signedOut, .claude):
+            return LimitsNotice.claudeAppAvailable
+                ? .init("Claude Code isn't signed in on this Mac, so limits can't update.",
+                        button: "Use the Claude app's sign-in", action: .useClaudeApp)
+                : .init("Claude Code isn't signed in. Run claude in Terminal and sign in.")
+        case (.needsKey, .claude):
+            return .init("macOS needs your OK to read the Claude app's sign-in. Choose Always Allow.",
+                         button: "Allow access", action: .useClaudeApp)
+        case (.expired, .claude):
+            return usesClaudeApp
+                ? .init("The Claude app's sign-in has lapsed. Open Claude, then try again.", button: "Try again", action: .useClaudeApp)
+                : .init("Claude Code's sign-in has lapsed. Run claude once to renew it.")
+        case (.signedOut, .codex): return .init("Codex isn't signed in. Run codex in Terminal and sign in.")
+        case (.expired, .codex): return .init("Codex's sign-in has lapsed. Run codex once to renew it.")
+        case (.signedOut, .opencodeGo): return .init("Connect OpenCode Go in OpenCode to see your limits.")
+        case (.needsKey, .devin):
+            return .init("Sign in with the Devin CLI (devin auth login), or paste a token.", button: "Open Settings", action: .openSettings)
+        case (.expired, .devin):
+            return .init("Devin didn't accept the sign-in. Run devin auth login again.", button: "Open Settings", action: .openSettings)
+        case (.needsKey, .droid):
+            return .init("Sign in at app.factory.ai in your browser, or add a Factory API key.", button: "Open Settings", action: .openSettings)
+        case (.expired, .droid):
+            return .init("Factory didn't accept the sign-in or API key.", button: "Open Settings", action: .openSettings)
+        case (.expired, _): return .init("\(self.id.displayName) didn't accept the sign-in.")
+        case (.signedOut, _), (.needsKey, _): return .init("Sign in to \(self.id.displayName) to see your limits.")
+        case (.rateLimited, _), (.failed, _): return .init("Couldn't reach \(self.id.displayName).")
+        }
+    }
+}
+
+struct LimitsNotice {
+    enum Action { case useClaudeApp, openSettings }
+
+    var text: String
+    var button: String?
+    var action: Action?
+
+    init(_ text: String, button: String? = nil, action: Action? = nil) {
+        self.text = text
+        self.button = button
+        self.action = action
+    }
+
+    /// The Claude desktop app has signed in on this Mac. Checked once: it reads a file.
+    @MainActor static let claudeAppAvailable = ClaudeDesktop.isAvailable
+}
+
+/// The rows at the foot of the menu.
+enum MenuAction: Int, CaseIterable {
+    case refresh, settings, quit
+
+    var title: String {
+        switch self {
+        case .refresh: "Refresh"
+        case .settings: "Settings…"
+        case .quit: "Quit count yo tokens"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .refresh: "arrow.clockwise"
+        case .settings: "gearshape"
+        case .quit: "power"
+        }
+    }
+
+    var shortcut: String {
+        switch self {
+        case .refresh: "⌘R"
+        case .settings: "⌘,"
+        case .quit: "⌘Q"
         }
     }
 }

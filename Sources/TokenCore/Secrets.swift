@@ -10,6 +10,8 @@ public enum Secrets {
     public enum Key: String, Sendable {
         case devinToken = "devin.token"
         case droidAPIKey = "droid.apiKey"
+        /// The desktop app's access token that last worked for usage (see ClaudeLimits).
+        case claudeDesktopToken = "claude.desktopToken"
     }
 
     static let service = "com.sirrayi.countyotokens"

@@ -16,8 +16,9 @@ enum Main {
 }
 
 /// A real status item with a real NSMenu: the system draws the material, the rounded corners and the
-/// open/close fade, exactly like Apple's own menu extras. Each card section is a custom-view item
-/// (custom views are never drawn highlighted), separated by native separators.
+/// open/close fade, exactly like Apple's own menu extras. Every row is a custom-view item (custom
+/// views are never drawn highlighted, and a click in one doesn't close the menu), separated by
+/// native separators.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     private let store = UsageStore()
@@ -117,10 +118,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         menu.addItem(.separator())
         menu.addItem(self.viewItem(FooterSection()))
         menu.addItem(.separator())
-        menu.addItem(self.actionItem("Refresh", symbol: "arrow.clockwise", key: "r", action: #selector(self.refresh)))
-        menu.addItem(self.actionItem("Settings…", symbol: "gearshape", key: ",", action: #selector(self.openSettings)))
+        menu.addItem(self.actionItem(.refresh))
+        menu.addItem(self.actionItem(.settings))
         menu.addItem(.separator())
-        menu.addItem(self.actionItem("Quit count yo tokens", symbol: "power", key: "q", action: #selector(self.quit)))
+        menu.addItem(self.actionItem(.quit))
         return menu
     }
 
@@ -137,11 +138,82 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         return item
     }
 
-    private func actionItem(_ title: String, symbol: String, key: String, action: Selector) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
-        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+    /// Refresh, Settings and Quit. The title, target and action are for the keyboard (arrow keys and
+    /// Return go through the menu itself); clicks are the row's own.
+    private func actionItem(_ action: MenuAction) -> NSMenuItem {
+        let item = self.viewItem(ActionRow(action: action) { Main.delegate.perform(action) })
+        item.title = action.title
+        item.tag = action.rawValue
+        item.representedObject = action.rawValue
+        // Never drawn (the row draws its own), and normally never used: `menuHasKeyEquivalent`
+        // answers first. It's what the shortcut falls back to if the menu doesn't ask.
+        item.keyEquivalent = switch action {
+        case .refresh: "r"
+        case .settings: ","
+        case .quit: "q"
+        }
+        item.keyEquivalentModifierMask = .command
         item.target = self
+        item.action = switch action {
+        case .refresh: #selector(self.refresh)
+        case .settings: #selector(self.openSettings)
+        case .quit: #selector(self.quit)
+        }
         return item
+    }
+
+    /// A click on one of the rows. Refresh happens in place; the others close the menu first.
+    fileprivate func perform(_ action: MenuAction) {
+        switch action {
+        case .refresh:
+            self.store.refreshNow()
+        case .settings:
+            self.openSettingsFromMenu()
+        case .quit:
+            NSApp.terminate(nil)
+        }
+    }
+
+    /// Closes the menu, then opens Settings once it has gone.
+    func openSettingsFromMenu() {
+        self.statusItem.menu?.cancelTracking()
+        MainLoop.soon { Main.delegate.openSettings() }
+    }
+
+    /// The keyboard's highlight, so a row can draw it (the menu never draws one on a custom view).
+    func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+        let action = (item?.representedObject as? Int).flatMap(MenuAction.init(rawValue:))
+        if self.store.highlightedAction != action { self.store.highlightedAction = action }
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        self.isMenuOpen = false
+        self.store.menuDidClose()
+    }
+
+    private(set) var isMenuOpen = false
+
+    /// Shortcuts while the menu is open. ⌘R is handled right here and reported as "not a shortcut",
+    /// which is what keeps the menu open; the other two go the usual way and close it.
+    func menuHasKeyEquivalent(_ menu: NSMenu, for event: NSEvent, target: AutoreleasingUnsafeMutablePointer<AnyObject?>,
+                              action: UnsafeMutablePointer<Selector?>) -> Bool
+    {
+        guard event.type == .keyDown, event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command else { return false }
+        switch event.charactersIgnoringModifiers?.lowercased() {
+        case "r":
+            if self.isMenuOpen { self.store.refreshNow() }
+            return false
+        case ",":
+            target.pointee = self
+            action.pointee = #selector(self.openSettings)
+            return true
+        case "q":
+            target.pointee = self
+            action.pointee = #selector(self.quit)
+            return true
+        default:
+            return false
+        }
     }
 
     /// Re-run whenever the selection or the enabled set changes, including while the menu is open.
@@ -206,7 +278,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
     }
 
-    func menuWillOpen(_ menu: NSMenu) { self.store.menuWillOpen() }
+    func menuWillOpen(_ menu: NSMenu) {
+        self.isMenuOpen = true
+        self.store.menuWillOpen()
+    }
 
     // MARK: Menu probe
 
@@ -237,6 +312,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     private var probeReport = ""
+    private var probeClickNote = ""
     private var probeMainActorRan = false
 
     /// Opens the menu from the run loop, the way a click does. Opened from inside a main-queue job
@@ -259,13 +335,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
         RunLoop.main.add(check, forMode: .common)
         if let target {
-            let click = Timer(timeInterval: 0.8, repeats: false) { _ in
+            let switchProvider = Timer(timeInterval: 0.8, repeats: false) { _ in
                 MainActor.assumeIsolated {
                     withAnimation(.smooth(duration: 0.3)) { Main.delegate.store.selected = target }
                 }
             }
-            RunLoop.main.add(click, forMode: .common)
+            RunLoop.main.add(switchProvider, forMode: .common)
         }
+        // A click on the Refresh row, put on the app's event queue so the menu's own tracking handles
+        // it the way it handles the mouse: the menu has to stay open and the refresh has to start.
+        // (A queued ⌘R never reaches an open menu, so the shortcut can't be probed this way.)
+        let click = Timer(timeInterval: 1.2, repeats: false) { _ in
+            MainActor.assumeIsolated {
+                guard let view = Main.delegate.statusItem.menu?.items
+                    .first(where: { ($0.representedObject as? Int) == MenuAction.refresh.rawValue })?.view,
+                    let window = view.window else { return }
+                let point = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+                for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    if let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                      windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+                    {
+                        NSApp.postEvent(event, atStart: false)
+                    }
+                }
+            }
+        }
+        RunLoop.main.add(click, forMode: .common)
+        let clickCheck = Timer(timeInterval: 1.5, repeats: false) { _ in
+            MainActor.assumeIsolated {
+                let delegate = Main.delegate
+                delegate.probeClickNote = "after a click on Refresh: menu \(delegate.isMenuOpen ? "open" : "CLOSED"), refreshing \(delegate.store.isRefreshing)"
+            }
+        }
+        RunLoop.main.add(clickCheck, forMode: .common)
         // Measured late, so limits fetched on open have landed and resized whatever they resize.
         let timer = Timer(timeInterval: 2.5, repeats: false) { _ in
             MainActor.assumeIsolated {
@@ -307,6 +409,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             lines.append(String(format: "menu %.0f tall, screen %.0f usable", window.frame.height,
                                 window.screen?.visibleFrame.height ?? 0))
         }
+        lines.append(self.probeClickNote)
+        if !self.probeClickNote.contains("menu open, refreshing true") { problems += 1 }
         if !self.probeMainActorRan {
             problems += 1
             lines.append("main actor STALLED while the menu was open")

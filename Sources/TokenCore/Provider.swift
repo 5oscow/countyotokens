@@ -67,8 +67,11 @@ public struct ProviderCredentials: Sendable {
     public var devinToken: String?
     public var devinOrganization: String?
     public var droidAPIKey: String?
+    /// Whether Claude may use the desktop app's sign-in, and whether macOS may ask about it now.
+    public var claudeDesktop: ClaudeDesktop.Access
 
-    public init(devinToken: String?, devinOrganization: String?, droidAPIKey: String?) {
+    public init(devinToken: String?, devinOrganization: String?, droidAPIKey: String?, claudeDesktop: ClaudeDesktop.Access = .off) {
+        self.claudeDesktop = claudeDesktop
         self.devinToken = devinToken
         self.devinOrganization = devinOrganization
         self.droidAPIKey = droidAPIKey
@@ -96,7 +99,7 @@ public enum ProviderLimits {
     /// recovery work (Claude: get Claude Code to renew an expired sign-in).
     public static func fetch(_ id: ProviderID, credentials: ProviderCredentials, userInitiated: Bool = false) async throws(LimitsError) -> PlanLimits {
         switch id {
-        case .claude: try await ClaudeLimits.fetch(mayRenew: userInitiated)
+        case .claude: try await ClaudeLimits.fetch(mayRenew: userInitiated, desktop: credentials.claudeDesktop)
         case .codex: try await CodexLimits.fetch()
         case .opencodeGo: try await OpenCodeGoLimits.fetch()
         case .devin: try await DevinLimits.fetch(token: credentials.devinToken, organization: credentials.devinOrganization)

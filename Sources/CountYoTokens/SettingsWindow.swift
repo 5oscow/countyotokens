@@ -551,9 +551,14 @@ struct ProviderStatus {
             return
         }
         if let issue = model.limitsIssue {
-            let text = issue == .needsKey
-                ? (model.id == .devin ? "Needs a Devin CLI sign-in" : "Needs an API key")
-                : model.message(for: issue)
+            let text: String = switch (issue, model.id) {
+            case (.needsKey, .devin): "Needs a Devin CLI sign-in"
+            case (.needsKey, .droid): "Needs a sign-in or an API key"
+            case (.needsKey, .claude): "Waiting for your OK in the Keychain"
+            case (.signedOut, .claude): "Claude Code isn't signed in"
+            case (.expired, .claude): "Sign-in has lapsed"
+            default: model.message(for: issue)
+            }
             self = .init(level: .attention, text: text)
         } else if let limits = model.limits, limits.fetchedAt > .distantPast {
             self = .init(level: .ok, text: "Limits " + Format.updated(limits.fetchedAt, now: Date()).lowercased())
@@ -672,6 +677,8 @@ private struct ProviderPane: View {
                 DevinCredentials()
             } else if self.id == .droid {
                 DroidCredentials()
+            } else if self.id == .claude, LimitsNotice.claudeAppAvailable {
+                ClaudeAppSignIn()
             }
 
             Section {
@@ -682,7 +689,7 @@ private struct ProviderPane: View {
                     Spacer()
                     Button("Refresh Now") {
                         model.refresh()
-                        model.credentialsChanged()
+                        model.credentialsChanged(userInitiated: true)
                     }
                     .disabled(!enabled)
                 }
@@ -706,12 +713,12 @@ private struct ProviderPane: View {
 
     private var limitsSource: String {
         switch self.id {
-        case .claude: "Claude Code's sign-in"
+        case .claude: self.store.prefs.usesClaudeApp ? "Claude Code's sign-in, then the Claude app's" : "Claude Code's sign-in"
         case .codex: "Codex's sign-in"
         case .opencodeGo: "The Go key OpenCode holds"
         case .zen: "None: pay as you go"
-        case .devin: "The session token below"
-        case .droid: "The Factory API key below"
+        case .devin: "The Devin CLI's sign-in, or a token below"
+        case .droid: "A browser sign-in, or the API key below"
         }
     }
 }
@@ -802,6 +809,22 @@ private struct DevinCredentials: View {
             Text("Devin sign-in")
         } footer: {
             Footnote("Read from the Devin CLI's own sign-in, so nothing to paste once devin auth login has run. A token pasted here is tried first; the organization defaults to the CLI's. Kept in your Keychain and only ever sent to app.devin.ai.")
+        }
+    }
+}
+
+private struct ClaudeAppSignIn: View {
+    @Environment(UsageStore.self) private var store
+
+    var body: some View {
+        Section {
+            SettingRow("Use the Claude app's sign-in", detail: "For when Claude Code's own has lapsed.",
+                       isOn: Binding(get: { self.store.prefs.usesClaudeApp },
+                                     set: { $0 ? self.store.useClaudeApp() : self.store.stopUsingClaudeApp() }))
+        } header: {
+            Text("Claude app")
+        } footer: {
+            Footnote("Sessions started from the Claude desktop app leave Claude Code with a sign-in that lasts a few hours and can't be renewed, so limits stall. With this on, limits fall back to the desktop app's own sign-in. macOS asks for your OK first, and again after each update of count yo tokens: choose Always Allow. Only an access token is read, and it's only ever sent to api.anthropic.com.")
         }
     }
 }

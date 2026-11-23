@@ -5,6 +5,17 @@ import TokenCore
 // out so they pick up whatever Claude appended meanwhile (the common case while you work).
 // Usage: tokbench [warm-iterations] [interval-seconds]   |   tokbench limits   |   tokbench renew-claude   |   tokbench droid-signin
 let command = CommandLine.arguments.dropFirst().first
+if command == "claude-desktop" {
+    // What the Claude desktop app's sign-in would give, never opening the Keychain.
+    // With a blob file and a password: decrypts that instead (a self-check of the decryption).
+    let arguments = Array(CommandLine.arguments.dropFirst(2))
+    if arguments.count == 2, let blob = try? Data(contentsOf: URL(fileURLWithPath: arguments[0])) {
+        for line in ClaudeDesktop.describe(cache: blob, password: Data(arguments[1].utf8)) { print(line) }
+    } else {
+        print("available=\(ClaudeDesktop.isAvailable)", ClaudeDesktop.describe(.cachedOnly))
+    }
+    exit(0)
+}
 if command == "droid-signin" {
     // Which browser sign-in Droid would use: its expiry only, never the token.
     let started = ContinuousClock.now
