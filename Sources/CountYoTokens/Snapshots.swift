@@ -144,10 +144,10 @@ private struct MenuCard: View {
         VStack(alignment: .leading, spacing: 0) {
             MenuPreview()
             Separator()
-            MenuRow(title: "Refresh", symbol: "arrow.clockwise", key: "⌘R")
-            MenuRow(title: "Settings…", symbol: "gearshape", key: "⌘,")
+            ActionRow(action: .refresh) {}
+            ActionRow(action: .settings) {}
             Separator()
-            MenuRow(title: "Quit count yo tokens", symbol: "power", key: "⌘Q")
+            ActionRow(action: .quit) {}
         }
         .padding(.bottom, 5)
         .frame(width: Theme.menuWidth + 12)
@@ -220,26 +220,6 @@ enum Wallpaper {
                      darkSharp: dark.map { NSImage(cgImage: $0, size: NSSize(width: $0.width, height: $0.height)) },
                      lightFrosted: light.flatMap(frost), darkFrosted: dark.flatMap(frost))
     }()
-}
-
-private struct MenuRow: View {
-    let title: String
-    let symbol: String
-    let key: String
-
-    var body: some View {
-        HStack(spacing: 7) {
-            Image(systemName: self.symbol)
-                .font(.system(size: 12.5))
-                .frame(width: 16)
-            Text(self.title)
-            Spacer()
-            Text(self.key).foregroundStyle(.secondary)
-        }
-        .font(.system(size: 13))
-        .padding(.horizontal, Theme.inset)
-        .frame(height: 22)
-    }
 }
 
 /// A slice of desktop, cut from the right of a 1512-point-wide screen: the Sonoma wallpaper in the

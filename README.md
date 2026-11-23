@@ -92,12 +92,12 @@ takes about a minute.
 
 | Provider | Spend, from | Limits, via |
 |---|---|---|
-| **Claude** | Claude Code and pi/omp logs, priced at Anthropic list prices | Claude Code's sign-in: session, weekly, and any model-scoped weekly limits |
-| **Codex** | `~/.codex/sessions`, priced at OpenAI list prices | `~/.codex/auth.json`: 5-hour and weekly |
+| **Claude** | Claude Code and pi/omp logs, priced at Anthropic list prices | Claude Code's sign-in, or the Claude desktop app's if you turn that on: session, weekly, and any model-scoped weekly limits |
+| **Codex** | `~/.codex/sessions`, priced at OpenAI list prices | `~/.codex/auth.json`, or the Codex CLI itself once that has lapsed: 5-hour and weekly |
 | **OpenCode Go** | OpenCode's own history (`opencode.db`), as recorded | The Go key OpenCode holds: 5-hour, weekly, monthly |
 | **OpenCode Zen** | OpenCode's own history, as recorded | None (pay as you go) |
-| **Devin** | — | A token you paste in Settings: daily and weekly |
-| **Droid** (Factory) | — | An API key you paste in Settings: standard and premium, or 5-hour, weekly, monthly |
+| **Devin** | — | The Devin CLI's sign-in, or a token you paste in Settings: daily and weekly |
+| **Droid** (Factory) | — | A Factory API key, or the sign-in app.factory.ai keeps in your browser: standard and premium, or 5-hour, weekly, monthly |
 
 Model prices come from the [models.dev](https://models.dev) catalogs. A snapshot is built in, and it
 is refreshed at most once a day.
@@ -151,14 +151,24 @@ is refreshed at most once a day.
 
 ## Privacy and security
 
-- **Credentials are only ever read.** They are never refreshed, rewritten or copied:
+- **Other tools' credentials are only ever read.** This app never refreshes or rewrites them:
   - Claude Code's Keychain item, through `/usr/bin/security`, which that item already trusts.
   - Codex's `auth.json`.
   - OpenCode's credential table, opened read-only.
+  - The Devin CLI's `credentials.toml`.
+- **A lapsed sign-in is renewed by the tool that owns it.** When Claude Code's or Codex's sign-in
+  has expired, the app starts that CLI for a moment (`claude` to show `/status`, `codex app-server`
+  in its read-only sandbox) and the CLI renews its own token. No model is called.
+- **The Claude desktop app's sign-in is used only if you turn it on.** It's off by default. Turned
+  on, the app reads the desktop app's saved sign-in, which is encrypted with a key in your Keychain
+  ("Claude Safe Storage"), so macOS asks for your OK first. Only an access token is taken, and the
+  one that works is kept in this app's own Keychain item.
+- **From your browser, one thing at most.** Without a Factory API key, the app looks for the
+  access token app.factory.ai keeps in local storage in Chrome, Chromium, Arc, Brave, Edge,
+  Vivaldi and a few others. No cookies, no other sites, and Factory's refresh token is left alone.
 - **Keys you paste stay in your login Keychain.** That covers Devin and Factory.
 - **Each token goes only to its own provider, over HTTPS.** It is never logged or written anywhere
   else.
-- **Nothing is read from your browser.** No cookies, no local storage.
 - **Requests are kept light.** Limits are checked every few minutes, and the app backs off when a
   server asks it to.
 - **No telemetry.** The only other network request fetches the public model price list.
